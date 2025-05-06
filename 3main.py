@@ -27,8 +27,8 @@ logger = logging.getLogger(__name__)
 
 # Keywords to search
 search_texts: List[str] = [
-    "Your policy's illustrated values",
-    "Your policy's current charges summary",
+    "Your supplemental illustration",
+    "Your policy's current charges summary"
 ]
 
 @app.post("/upload-pdf/")
