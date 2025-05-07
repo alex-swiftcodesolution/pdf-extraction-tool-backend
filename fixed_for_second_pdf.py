@@ -8,7 +8,6 @@ import pandas as pd
 import numpy as np
 from io import BytesIO
 import logging
-from collections import Counter
 
 app = FastAPI()
 
@@ -23,18 +22,17 @@ app.add_middleware(
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ---------------------------- Config ----------------------------
-
-PYMUPDF_KEYWORDS = [
+# --- Keywords ---
+pymupdf_keywords = [
     "Tabular Detail - Non Guaranteed",
-    "Annual Cost Summary"
+    "Annual Cost Summary",
 ]
 
-PDFPLUMBER_KEYWORDS = [
+pdfplumber_keywords = [
     "Your policy's illustrated values",
     "Your policy's current charges summary",
     "Basic Ledger, Non-guaranteed scenario",
-    "Policy Charges Ledger"
+    "Policy Charges Ledger",
 ]
 
 TABULAR_HEADERS = [
@@ -51,8 +49,7 @@ COST_SUMMARY_HEADERS = [
     "Net Death Benefit EOY"
 ]
 
-# ---------------------- PyMuPDF Extraction ----------------------
-
+# --- Extractor Functions for PyMuPDF ---
 def extract_projection_table(page):
     lines = []
     blocks = page.get_text("dict")["blocks"]
@@ -113,89 +110,34 @@ def extract_cost_summary_table(page):
     table_data = [row[:len(COST_SUMMARY_HEADERS)] + [''] * (len(COST_SUMMARY_HEADERS) - len(row)) for row in table_data]
     return pd.DataFrame(table_data, columns=COST_SUMMARY_HEADERS)
 
-# ------------------- pdfplumber Flexible Logic ------------------
-
-def extract_tables_with_flexible_headers(pdf):
-    tables_by_text = {text: [] for text in PDFPLUMBER_KEYWORDS}
-    for page in pdf.pages:
-        text = (page.extract_text() or "").lower()
-        for keyword in PDFPLUMBER_KEYWORDS:
-            if keyword.lower() in text:
-                tables = page.extract_tables(table_settings={
-                    "vertical_strategy": "lines",
-                    "horizontal_strategy": "text",
-                    "intersection_tolerance": 5,
-                    "snap_tolerance": 3,
-                })
-
-                for table in tables:
-                    cleaned = [[str(cell).strip() if cell else "" for cell in row] for row in table]
-                    cleaned = [row for row in cleaned if any(cell for cell in row)]
-                    if not cleaned:
-                        continue
-
-                    header_keywords = {"year", "age"}
-                    header_row_index = -1
-                    for idx, row in enumerate(cleaned[:6]):
-                        normalized = [cell.lower() for cell in row]
-                        if any(any(kw in cell for kw in header_keywords) for cell in normalized):
-                            header_row_index = idx
-                            break
-
-                    if header_row_index == -1:
-                        continue
-
-                    header_rows = cleaned[max(0, header_row_index - 2):header_row_index + 1]
-                    max_cols = max(len(row) for row in header_rows)
-                    df_header = pd.DataFrame([row + [""] * (max_cols - len(row)) for row in header_rows]).ffill(axis=1)
-
-                    headers = [
-                        " ".join(str(df_header.iloc[row_idx, col_idx]).strip() for row_idx in range(len(df_header)))
-                        for col_idx in range(df_header.shape[1])
-                    ]
-
-                    def deduplicate_headers(headers):
-                        counts = Counter()
-                        result = []
-                        for h in headers:
-                            counts[h] += 1
-                            result.append(f"{h}_{counts[h]}" if counts[h] > 1 else h)
-                        return result
-
-                    headers = deduplicate_headers(headers)
-                    data_rows = cleaned[header_row_index + 1:]
-                    data_rows = [row + [""] * (len(headers) - len(row)) for row in data_rows]
-                    df = pd.DataFrame(data_rows, columns=headers)
-                    df["Source_Text"] = keyword
-                    df["Page_Number"] = page.page_number
-                    if not df.empty:
-                        tables_by_text[keyword].append(df)
-    return tables_by_text
-
-# --------------------------- Main API ---------------------------
-
+# --- API Endpoint ---
 @app.post("/upload-pdf/")
 async def upload_pdf(file: UploadFile = File(...)):
     try:
         content = await file.read()
         pdf_file = BytesIO(content)
-
         results = []
 
-        # Detect keywords first
-        all_text = ""
+        found_keywords = []
+
+        # --- Search all text ---
+        full_text = ""
         with fitz.open(stream=pdf_file, filetype="pdf") as doc:
             for page in doc:
-                all_text += page.get_text("text").lower()
+                full_text += page.get_text("text").lower()
 
-        found_keywords = [k for k in PYMUPDF_KEYWORDS + PDFPLUMBER_KEYWORDS if k.lower() in all_text]
+        for key in pymupdf_keywords + pdfplumber_keywords:
+            if key.lower() in full_text:
+                found_keywords.append(key)
 
         if not found_keywords:
             return JSONResponse(content={"message": "No matching keywords found."}, status_code=200)
 
-        # PyMuPDF processing
-        if any(k in found_keywords for k in PYMUPDF_KEYWORDS):
-            pdf_file.seek(0)
+        # --- Re-open for processing ---
+        pdf_file.seek(0)
+
+        # -- PyMuPDF-based extraction
+        if any(k in found_keywords for k in pymupdf_keywords):
             with fitz.open(stream=pdf_file, filetype="pdf") as doc:
                 for page_num, page in enumerate(doc):
                     text = page.get_text("text").lower()
@@ -204,7 +146,7 @@ async def upload_pdf(file: UploadFile = File(...)):
                         df = extract_projection_table(page)
                         if not df.empty:
                             results.append({
-                                "source": "Tabular Detail - Non Guaranteed",
+                                "source": "Tabular Detail",
                                 "page": page_num + 1,
                                 "data": df.replace([np.nan, np.inf, -np.inf], None).to_dict(orient="records")
                             })
@@ -218,25 +160,31 @@ async def upload_pdf(file: UploadFile = File(...)):
                                 "data": df.replace([np.nan, np.inf, -np.inf], None).to_dict(orient="records")
                             })
 
-        # pdfplumber processing
-        if any(k in found_keywords for k in PDFPLUMBER_KEYWORDS):
+        # -- pdfplumber-based extraction
+        if any(k in found_keywords for k in pdfplumber_keywords):
             pdf_file.seek(0)
             with pdfplumber.open(pdf_file) as pdf:
-                tables = extract_tables_with_flexible_headers(pdf)
-                for source_text, df_list in tables.items():
-                    for df in df_list:
-                        if not df.empty:
-                            results.append({
-                                "source": source_text,
-                                "page": int(df["Page_Number"].iloc[0]),
-                                "data": df.replace([np.nan, np.inf, -np.inf], None).to_dict(orient="records")
-                            })
+                for page_num, page in enumerate(pdf.pages):
+                    text = (page.extract_text() or "").lower()
+
+                    for keyword in pdfplumber_keywords:
+                        if keyword.lower() in text:
+                            tables = page.extract_tables()
+                            for table in tables:
+                                if not table or len(table) < 2:
+                                    continue
+                                df = pd.DataFrame(table[1:], columns=table[0])
+                                if not df.empty:
+                                    results.append({
+                                        "source": keyword,
+                                        "page": page_num + 1,
+                                        "data": df.replace([np.nan, np.inf, -np.inf], None).to_dict(orient="records")
+                                    })
 
         if not results:
             return JSONResponse(content={"message": "Keywords matched but no tables extracted."}, status_code=200)
 
-        return JSONResponse(content={"tables": jsonable_encoder(results)}, status_code=200)
+        return JSONResponse(content={"tables": results}, status_code=200)
 
     except Exception as e:
-        logger.error(f"Processing failed: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Processing failed: {str(e)}")
