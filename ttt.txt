@@ -1,0 +1,28 @@
+first let's assign our keyword strings:
+1. "Basic Ledger, Non-guaranteed scenario"
+2. "Policy Charges Ledger"
+3. "Your policy's illustrated values"
+4. "Your policy's current charges summary"
+5. "Tabular Detail - Non Guaranteed" [this one is perfectly fine]
+6. "Annual Cost Summary"
+7. "Current Illustrated Rate*"
+8. "Policy Charges and Other Expenses"
+
+now we gotta define custom headers for all of these:
+1. Age|End of Policy Year|Premium Outlay|Net Distributions|[alternate scenario] Current Value|[alternate scenario] Cash Value|[alternate scenario] Death Benefit|[current scenario]Current Value|Cash Value|Death Benefit
+2. Age|End of Policy Year|Premium Outlay|[Current Scenario] Premium Charge|[Current Scenario] Policy Fee|[Current Scenario] Per Unit Charge|[Current Scenario] Cost of Insurance|[Current Scenario] Rider Charges|[Current Scenario] Asset Charges|[Current Scenario] Total Policy Charges
+3. Year|Age|Premium Outlay|Net Outlay|[Guaranteed Values][2.00% crediting rate and maximum charges]Surrender Value|[Guaranteed Values][2.00% crediting rate and maximum charges]Surrender Value|[Non-Guaranteed Values][4.25% alternative crediting rate and current charges]Cash Value|[Non-Guaranteed Values][4.25% alternative crediting rate and current charges]Surrender Value|[Non-Guaranteed Values][4.25% alternative crediting rate and current charges]Death Benefit|[Non-Guaranteed Values][6.59% illustrated crediting rate and current charges]Cash Value|[Non-Guaranteed Values][6.59% illustrated crediting rate and current charges]Surrender Value|[Non-Guaranteed Values][6.59% illustrated crediting rate and current charges]Death Benfit
+4. Year|Age|Premium Outlay|Premium Charge|Cost of Insurance Charge|Policy Issue Charge|Additional Charges|Bonus Interest Credit|Additional Policy Credits|Surrenders and Loans|Interest and Crediting Earned|[Non-Guaranteed Values][Using illustrated crediting rates and current charges]Cash Value|[Non-Guaranteed Values][Using illustrated crediting rates and current charges]Surrender Value|[Non-Guaranteed Values][Using illustrated crediting rates and current charges]Death Benfit
+5. 5th one's header is fine - already defined in code
+6. 6th one's header is also fine - already defined in code
+7. Policy Year|Age|Premium Outlay|Planned Annual Income|Planned Annual Loan|Accumulated Loan Amount|Weighted Average Interest Rate|Accumulated Value|Cash Surrender Value|Net Death Benefit
+8. Policy Year|Age|[What You Pay]Premium Outlay|
+[What we deduct]|Premium Expense Charge
+[What we deduct]|Cost of Insurance
+[What we deduct]|Cost of Other Benefits
+[What we deduct]|Policy Fee
+[What we deduct]|Premium Expense Charge
+[What we deduct]|Premium Expense Charge
+
+----------------------------------------
+
