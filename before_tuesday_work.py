@@ -29,7 +29,8 @@ logger = logging.getLogger(__name__)
 PYMUPDF_KEYWORDS = [
     "Tabular Detail - Non Guaranteed",
     "Annual Cost Summary",
-    "Policy Charges and Other Expenses"
+    "Policy Charges and Other Expenses",
+    "Current Illustrated Rate*"  # Moved to PyMuPDF keywords
 ]
 
 PDFPLUMBER_KEYWORDS = [
@@ -37,7 +38,7 @@ PDFPLUMBER_KEYWORDS = [
     "Your policy's current charges summary",
     "Basic Ledger, Non-guaranteed scenario",
     "Policy Charges Ledger",
-    "Current Illustrated Rate*",
+    # "Current Illustrated Rate*"  # Removed from pdfplumber keywords
 ]
 
 # NW
@@ -66,6 +67,7 @@ ILLUSTRATED_VALUES_HEADERS = [
     "[Non-Guaranteed Values][6.59% illustrated crediting rate and current charges]Surrender Value",
     "[Non-Guaranteed Values][6.59% illustrated crediting rate and current charges]Death Benfit"
 ]
+
 # MN
 POLICY_CURRENT_CHARGES_SUMMARY_HEADERS=["Year","Age","Premium Outlay","Premium Charge","Cost of Insurance Charge","Policy Issue Charge","Additional Charges","Bonus Interest Credit","Additional Policy Credits","Surrenders and Loans","Interest and Crediting Earned","[Non-Guaranteed Values][Using illustrated crediting rates and current charges]Cash Value","[Non-Guaranteed Values][Using illustrated crediting rates and current charges]Surrender Value","[Non-Guaranteed Values][Using illustrated crediting rates and current charges]Death Benfit"]
 
@@ -76,6 +78,12 @@ POLICY_CHARGES_HEADERS = [
     "Expense Charge", "Accumulated value charge", "Policy charges", "interest credit",
     "additional bonus", "total credits", "accumulated value", "Surrender charges", "cash surrender value",
     "net death benefit","ex"
+]
+
+# LSW
+CURRENT_ILLUSTRATED_RATE_HEADERS = [
+    "Policy year","Age","Premium Outlay","Planned annual income","Planned annual loan","Accumulated loan amount",
+    "Weighted average interest rate","Accumulated value","Cash surrender value","Net death benefit"
 ]
 
 # ---------------------- PyMuPDF Extraction ----------------------
@@ -144,79 +152,113 @@ def extract_cost_summary_table(page):
 
 # LSW
 def extract_policy_charges_table(page, POLICY_CHARGES_HEADERS):
-    # Define the function to check if text is numeric or currency
     def is_numeric_or_currency(text):
-        # Matches numbers like 123, 123.45, $123.45, -$1,234.56
-        return bool(re.match(r'^-?\$?\d{1,3}(,\d{3})*(\.\d+)?$|^-?\$?\d+(\.\d+)?$', text))
+        # Matches currency (e.g., $1,234.56), integers (e.g., 1234), decimals (e.g., 1234.56)
+        return bool(re.match(r'^-?\$?\d{1,3}(,\d{3})*(\.\d+)?$|^-?\d+(\.\d+)?$', text))
     
     lines = []
     blocks = page.get_text("dict")["blocks"]
     
-    # Extract all text lines within the defined vertical range
     for block in blocks:
         for line in block.get("lines", []):
             for span in line["spans"]:
                 y = span["bbox"][1]
-                # Include only relevant rows based on vertical position
                 if 20 < y < 1000:
                     lines.append((y, span["bbox"][0], span["text"].strip()))
 
-    # Sort by Y (row-wise), then by X (column-wise)
-    lines.sort(key=lambda x: (round(x[0], 1), x[1]))
-
-    # Group into rows
+    lines.sort(key=lambda x: (round(x[0], 1), x[1]))  # Ensures top-to-bottom order
     table_data, current_row, last_y = [], [], None
     for y, x, text in lines:
         if last_y is None or abs(y - last_y) < 5:
             current_row.append((x, text))
         else:
-            current_row.sort()  # Sort left to right
-            # Filter out non-numeric or non-currency values for each row
+            current_row.sort()
             row = [t for _, t in current_row if is_numeric_or_currency(t)]
-            if len(row) >= 5:  # Only add rows with 10 or more valid entries
+            
+            print("Current row before filtering:", [t for _, t in current_row])
+            
+            if len(row) >= 3:  # Relaxed to 3 to ensure last row is included
                 table_data.append(row)
             current_row = [(x, text)]
         last_y = y
 
-    # Append the final row, ensuring the filter is applied
     if current_row:
         current_row.sort()
         row = [t for _, t in current_row if is_numeric_or_currency(t)]
-        if len(row) >= 10:  # Only add rows with 10 or more valid entries
-            table_data.append(row)
+        
+        print("Current row before filtering:", [t for _, t in current_row])
+        
+        if len(row) >= 3:
+            table_data.append(row)  # Ensure last row is included
 
-    # If no valid data was extracted, return an empty DataFrame
     if not table_data:
+        logger.info("No valid table data extracted for Policy Charges and Other Expenses")
         return pd.DataFrame()
 
-    # Normalize all rows to exactly 17 columns
-    expected_cols = 18
+    expected_cols = len(POLICY_CHARGES_HEADERS)
+    
+    normalized_data = [
+        row[:expected_cols] + [''] * (expected_cols - len(row))
+        for row in table_data
+    ][::-1]
+    
+    df = pd.DataFrame(normalized_data, columns=POLICY_CHARGES_HEADERS)
+    
+    df_transposed = df.transpose()
+    
+    return df_transposed
+
+# LSW
+def extract_current_illustrated_rate_table(page):
+    def is_numeric_or_currency(text):
+        return bool(re.match(r'^-?\$?\d{1,3}(,\d{3})*(\.\d+)?$|^-?\d+(\.\d+)?$|^-?\d*\.\d+%?$', text))    
+    
+    lines = []
+    blocks = page.get_text("dict")["blocks"]
+    
+    for block in blocks:
+        for line in block.get("lines", []):
+            for span in line["spans"]:
+                y = span["bbox"][1]
+                if 190 < y < 800:  # Adjusted range for flexibility
+                    lines.append((y, span["bbox"][0], span["text"].strip()))
+
+    lines.sort(key=lambda x: (round(x[0], 1), x[1]))
+    table_data, current_row, last_y = [], [], None
+    for y, x, text in lines:
+        if last_y is None or abs(y - last_y) < 6:
+            current_row.append((x, text))
+        else:
+            current_row.sort()
+            row = [t for _, t in current_row]
+            valid_values = [t for t in row if is_numeric_or_currency(t)]
+            if len(row) >= 3:  # Require at least 5 numeric/currency values
+                table_data.append(row)
+            current_row = [(x, text)]
+        last_y = y
+    
+    if current_row:
+        current_row.sort()
+        row = [t for _, t in current_row if is_numeric_or_currency(t)]
+        if len(row) >= 5:
+            table_data.append(row)
+    
+    if not table_data:
+        return pd.DataFrame()
+    
+    expected_cols = len(CURRENT_ILLUSTRATED_RATE_HEADERS)
     normalized_data = [
         row[:expected_cols] + [''] * (expected_cols - len(row))
         for row in table_data
     ]
-
-    # Optional: print shape and sample rows for debug
-    print(f"Extracted {len(normalized_data)} rows with {expected_cols} columns.")
-    for r in normalized_data[:3]:
-        print("Sample row:", r)
-
-    # Create DataFrame using provided headers
-    df = pd.DataFrame(normalized_data, columns=POLICY_CHARGES_HEADERS)
-
-    # Transpose the DataFrame (rows into columns)
-    df_transposed = df.T
-
-    # Flip the columns: Reverse the order of the columns
-    df_transposed = df_transposed.iloc[:, ::-1]  # This reverses the column order
-
-    return df_transposed
+    
+    df = pd.DataFrame(normalized_data, columns=CURRENT_ILLUSTRATED_RATE_HEADERS)
+    return df
 
 # ------------------- pdfplumber Flexible Logic ------------------
 
 def extract_tables_with_flexible_headers(pdf):
     tables_by_text = {text: [] for text in PDFPLUMBER_KEYWORDS}
-    # Collect rows for "Policy Charges Ledger" and "Policy Charges and Other Expenses" across pages
     policy_charges_ledger_rows = []
     policy_charges_ledger_pages = []
 
@@ -232,27 +274,25 @@ def extract_tables_with_flexible_headers(pdf):
                 })
 
                 for table in tables:
-                    # Keep all rows, including empty ones, to avoid premature truncation
                     cleaned = [[str(cell).strip() if cell else "" for cell in row] for row in table]
                     if not cleaned:
                         continue
 
                     if keyword.lower() == "your policy's illustrated values":
-                        # Logic for "Your policy's illustrated values" (unchanged)
                         headers = ILLUSTRATED_VALUES_HEADERS
-                        cleaned = [row for row in cleaned if any(cell for cell in row)]  # Remove empty rows here
+                        cleaned = [row for row in cleaned if any(cell for cell in row)]
                         if len(cleaned) < 5:
                             logger.warning(f"Table on page {page.page_number} has {len(cleaned)} rows, cannot skip 5 rows")
                             data_rows = cleaned
                         else:
-                            remaining_rows = cleaned[5:]  # Skip first 5 rows
+                            remaining_rows = cleaned[5:]
                             data_rows = []
                             i = 0
                             while i < len(remaining_rows):
                                 data_rows.extend(remaining_rows[i:i+5])
-                                i += 6  # Skip the next row after 5
+                                i += 6
                             if not data_rows:
-                                logger.info(f"No data rows remain after skipping top 5 rows and applying skip pattern on page {page.page_number}")
+                                logger.info(f"No data rows remain after skipping top 5 rows on page {page.page_number}")
                                 continue
                         data_rows = [row[:len(headers)] + [""] * (len(headers) - len(row)) for row in data_rows]
                         df = pd.DataFrame(data_rows, columns=headers)
@@ -262,22 +302,20 @@ def extract_tables_with_flexible_headers(pdf):
                             tables_by_text[keyword].append(df)
 
                     elif keyword.lower() == "your policy's current charges summary":
-                        # Logic for "Your policy's current charges summary" (unchanged)
-                        
                         headers = POLICY_CURRENT_CHARGES_SUMMARY_HEADERS
-                        cleaned = [row for row in cleaned if any(cell for cell in row)]  # Remove empty rows here
+                        cleaned = [row for row in cleaned if any(cell for cell in row)]
                         if len(cleaned) < 3:
                             logger.warning(f"Table on page {page.page_number} has {len(cleaned)} rows, cannot skip 3 rows")
                             data_rows = cleaned
                         else:
-                            remaining_rows = cleaned[3:]  # Skip first 3 rows
+                            remaining_rows = cleaned[3:]
                             data_rows = []
                             i = 0
                             while i < len(remaining_rows):
                                 data_rows.extend(remaining_rows[i:i+5])
-                                i += 6  # Skip the next row after 5
+                                i += 6
                             if not data_rows:
-                                logger.info(f"No data rows remain after skipping top 3 rows and applying skip pattern on page {page.page_number}")
+                                logger.info(f"No data rows remain after skipping top 3 rows on page {page.page_number}")
                                 continue
                         data_rows = [row[:len(headers)] + [""] * (len(headers) - len(row)) for row in data_rows]
                         df = pd.DataFrame(data_rows, columns=headers)
@@ -287,13 +325,11 @@ def extract_tables_with_flexible_headers(pdf):
                             tables_by_text[keyword].append(df)
 
                     elif keyword.lower() == "policy charges ledger":
-                        # Collect rows for multi-page processing
                         policy_charges_ledger_rows.extend(cleaned)
                         policy_charges_ledger_pages.append(page.page_number)
 
                     else:
-                        # Existing logic for other keywords
-                        cleaned = [row for row in cleaned if any(cell for cell in row)]  # Remove empty rows here
+                        cleaned = [row for row in cleaned if any(cell for cell in row)]
                         header_keywords = {"year", "age"}
                         header_row_index = -1
                         for idx, row in enumerate(cleaned[:6]):
@@ -331,7 +367,6 @@ def extract_tables_with_flexible_headers(pdf):
                         if not df.empty:
                             tables_by_text[keyword].append(df)
 
-    # Process "Policy Charges Ledger" rows
     if policy_charges_ledger_rows:
         cleaned = [row for row in policy_charges_ledger_rows if any(cell.strip() for cell in row)]
         if not cleaned:
@@ -427,9 +462,8 @@ async def upload_pdf(file: UploadFile = File(...)):
                             })
                             
                     if "policy charges and other expenses" in text.lower():
-                        df = extract_policy_charges_table(page,POLICY_CHARGES_HEADERS)
+                        df = extract_policy_charges_table(page, POLICY_CHARGES_HEADERS)
                         if not df.empty:
-                            print("API Data:", df.replace([np.nan, np.inf, -np.inf], None).to_dict(orient="records"))
                             results.append({
                                 "source": "Policy Charges and Other Expenses",
                                 "page": page_num + 1,
@@ -438,6 +472,17 @@ async def upload_pdf(file: UploadFile = File(...)):
                                 "data": df.replace([np.nan, np.inf, -np.inf], None).to_dict(orient="records")
                             })
                             
+                    if "current illustrated rate*" in text.lower():
+                        df = extract_current_illustrated_rate_table(page)
+                        if not df.empty:
+                            results.append({
+                                "source": "Current Illustrated Rate*",
+                                "page": page_num + 1,
+                                "keyword": "Current Illustrated Rate*",
+                                "extractor": "PyMuPDF",
+                                "data": df.replace([np.nan, np.inf, -np.inf], None).to_dict(orient="records")
+                            })
+
         # pdfplumber processing
         if any(k in found_keywords for k in PDFPLUMBER_KEYWORDS):
             pdf_file.seek(0)
