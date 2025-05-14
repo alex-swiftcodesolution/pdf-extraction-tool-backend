@@ -44,6 +44,14 @@ PDFPLUMBER_KEYWORDS = [
     "Policy Charges Ledger",
 ]
 
+# UNIVERSAL HEADER FOR ALL TABLES
+UNIVERSAL_HEADER_FOR_SEVEN_COL_TABLES = [
+    "Age","Policy Year","Premium Outlay","Net Outlay","Cash Value","Surrender Value","Death Benefit"
+]
+UNIVERSAL_HEADER_FOR_ONE_COL_TABLES = [
+    "Charges"
+]
+
 # NW
 TABULAR_HEADERS = [
     "end of year", "age", "annualized premium outlay", "loans/partial surrenders",
@@ -97,6 +105,54 @@ CURRENT_ILLUSTRATED_RATE_HEADERS = [
     "Policy year","Age","Premium Outlay","Planned annual income","Planned annual loan","Accumulated loan amount",
     "Weighted average interest rate","Accumulated value","Cash surrender value","Net death benefit"
 ]
+
+# ---------------------- Helper Functions ----------------------
+
+# Added: Helper function to check if a cell contains English words (non-numeric/non-currency text)
+def has_english_words(text):
+    """
+    Returns True if the text contains English words (non-numeric, non-currency, non-percentage).
+    Allows numbers, currency ($X,XXX.XX), percentages (X.XX%), and empty strings.
+    """
+    if not text or text in ("", None, np.nan):
+        return False
+    # Remove currency symbols, commas, and percentage signs
+    cleaned = re.sub(r'[\$,%]', '', str(text)).strip()
+    # Check if the remaining text is purely numeric or a decimal
+    return not bool(re.match(r'^-?\d*\.?\d*$', cleaned))
+
+# Added: Function to extract fields (illustration_date, insured_name, etc.)
+def extract_fields(pdf_text):
+    """
+    Extracts specified fields from PDF text using regex patterns.
+    Returns a dictionary with field values or None if not found.
+    """
+    fields = {
+        "illustration_date": None,
+        "insured_name": None,
+        "initial_death_benefit": None,
+        "assumed_ror": None,
+        "minimum_initial_pmt": None
+    }
+    
+    # Normalize text for case-insensitive matching
+    text = pdf_text.lower()
+    
+    # Patterns for each field
+    patterns = {
+        "illustration_date": r"illustration\s*date[:\s]*(\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|\w+\s+\d{1,2},\s+\d{4})",
+        "insured_name": r"insured\s*(?:name)?[:\s]*([a-z\s]+?)(?=\n|$|[a-z\s]*:)",
+        "initial_death_benefit": r"initial\s*death\s*benefit[:\s]*[\$]?([\d,]+\.?\d*)",
+        "assumed_ror": r"assumed\s*ror[:\s]*([\d.]+%)",
+        "minimum_initial_pmt": r"minimum\s*initial\s*pmt[:\s]*[\$]?([\d,]+\.?\d*)"
+    }
+    
+    for field, pattern in patterns.items():
+        match = re.search(pattern, text, re.IGNORECASE)
+        if match:
+            fields[field] = match.group(1).strip()
+    
+    return fields
 
 # ---------------------- PyMuPDF Extraction ----------------------
 
@@ -310,8 +366,12 @@ def extract_tables_with_flexible_headers(pdf):
                         filtered_headers = [headers[i] for i in selected_indices if i < len(headers)]
                         data_rows = [[row[i] for i in selected_indices if i < len(row)] for row in data_rows]
                         
-                        # Filter rows with no empty cells
-                        data_rows = [row for row in data_rows if all(cell not in ("", None, np.nan) for cell in row)]
+                        # Modified: Filter rows with no empty cells and no English words
+                        data_rows = [
+                            row for row in data_rows
+                            if all(cell not in ("", None, np.nan) for cell in row) and
+                            all(not has_english_words(cell) for cell in row)
+                        ]
                         
                         tables_by_text[keyword].extend([
                             tuple(row + [keyword, page.page_number])
@@ -351,6 +411,8 @@ def extract_tables_with_flexible_headers(pdf):
                             for row in data_rows
                         ]
 
+                        # Modified: Filter out zero or None sums (indicating empty/invalid cells)
+                        summed_values = [val for val in summed_values if val not in (0.0, None, np.nan)]
                         tables_by_text[keyword].extend([
                             (val, keyword, page.page_number)
                             for val in summed_values
@@ -385,8 +447,12 @@ def extract_tables_with_flexible_headers(pdf):
                         filtered_headers = [headers[i] for i in selected_indices if i < len(headers)]
                         data_rows = [[row[i] for i in selected_indices if i < len(row)] for row in data_rows]
                         
-                        # Filter rows with no empty cells
-                        data_rows = [row for row in data_rows if all(cell not in ("", None, np.nan) for cell in row)]
+                        # Modified: Filter rows with no empty cells and no English words
+                        data_rows = [
+                            row for row in data_rows
+                            if all(cell not in ("", None, np.nan) for cell in row) and
+                            all(not has_english_words(cell) for cell in row)
+                        ]
                         
                         tables_by_text[keyword].extend([
                             tuple(row + [keyword, page.page_number])
@@ -438,6 +504,13 @@ def extract_tables_with_flexible_headers(pdf):
                 filtered_headers = [headers[i] for i in selected_indices if i < len(headers)]
                 data_rows = [[row[i] for i in selected_indices if i < len(row)] for row in data_rows]
 
+                # Modified: Filter rows with no empty cells and no English words
+                data_rows = [
+                    row for row in data_rows
+                    if all(cell not in ("", None, np.nan) for cell in row) and
+                    all(not has_english_words(cell) for cell in row)
+                ]
+                
                 keyword = "Policy Charges Ledger"
                 tables_by_text[keyword].extend([
                     (row[0], keyword, min(policy_charges_ledger_pages))
@@ -447,30 +520,38 @@ def extract_tables_with_flexible_headers(pdf):
     combined_tables = {}
     for keyword in PDFPLUMBER_KEYWORDS:
         if tables_by_text[keyword]:
-            if keyword.lower() == "your policy's current charges summary":
-                df = pd.DataFrame(
-                    tables_by_text[keyword],
-                    columns=["Total Charges Sum", "Source_Text", "Page_Number"]
-                )
-            elif keyword.lower() == "policy charges ledger":
-                df = pd.DataFrame(
-                    tables_by_text[keyword],
-                    columns=[filtered_headers[0] if filtered_headers else "Column_10", "Source_Text", "Page_Number"]
-                )
+            # Determine the number of data columns (excluding Source_Text and Page_Number)
+            num_data_columns = len(tables_by_text[keyword][0]) - 2  # Subtract 2 for metadata columns
+
+            # Assign headers based on number of data columns
+            if num_data_columns == 7:
+                # Use universal header for 7-column tables
+                headers = UNIVERSAL_HEADER_FOR_SEVEN_COL_TABLES
+            elif num_data_columns == 1:
+                # Use universal header for 1-column tables
+                headers = UNIVERSAL_HEADER_FOR_ONE_COL_TABLES
             else:
-                selected_indices = {
-                    "your policy's illustrated values": [0, 1, 2, 3, 9, 10, 11],
-                    "basic ledger, non-guaranteed scenario": [0, 1, 2, 3, 7, 8, 9]
-                }.get(keyword.lower(), [0, 1, 2, 3])
-                headers = {
-                    "your policy's illustrated values": ILLUSTRATED_VALUES_HEADERS,
-                    "basic ledger, non-guaranteed scenario": headers if keyword.lower() == "basic ledger, non-guaranteed scenario" else ["Year", "Age", "Premium Outlay", "Net Outlay"]
-                }.get(keyword.lower(), ["Year", "Age", "Premium Outlay", "Net Outlay"])
-                filtered_headers = [headers[i] for i in selected_indices if i < len(headers)]
-                df = pd.DataFrame(
-                    tables_by_text[keyword],
-                    columns=filtered_headers + ["Source_Text", "Page_Number"]
-                )
+                # Fallback to existing headers for other cases
+                if keyword.lower() == "your policy's current charges summary":
+                    headers = ["Total Charges Sum"]
+                elif keyword.lower() == "policy charges ledger":
+                    headers = [filtered_headers[0] if filtered_headers else "Column_10"]
+                else:
+                    selected_indices = {
+                        "your policy's illustrated values": [0, 1, 2, 3, 9, 10, 11],
+                        "basic ledger, non-guaranteed scenario": [0, 1, 2, 3, 7, 8, 9]
+                    }.get(keyword.lower(), [0, 1, 2, 3])
+                    header_map = {
+                        "your policy's illustrated values": ILLUSTRATED_VALUES_HEADERS,
+                        "basic ledger, non-guaranteed scenario": headers if keyword.lower() == "basic ledger, non-guaranteed scenario" else ["Year", "Age", "Premium Outlay", "Net Outlay"]
+                    }.get(keyword.lower(), ["Year", "Age", "Premium Outlay", "Net Outlay"])
+                    headers = [header_map[i] for i in selected_indices if i < len(header_map)]
+
+            # Create DataFrame with appropriate headers plus metadata columns
+            df = pd.DataFrame(
+                tables_by_text[keyword],
+                columns=headers + ["Source_Text", "Page_Number"]
+            )
             combined_tables[keyword] = df if not df.empty else None
         else:
             combined_tables[keyword] = None
@@ -488,15 +569,21 @@ async def upload_pdf(file: UploadFile = File(...)):
         results = []
         tables_by_text = {k: [] for k in PYMUPDF_KEYWORDS}
 
+        # Modified: Extract all text for both keywords and fields
         all_text = ""
         with fitz.open(stream=pdf_file, filetype="pdf") as doc:
             for page in doc:
-                all_text += page.get_text("text").lower()
+                all_text += page.get_text("text") + "\n"  # Added newline for better pattern matching
         
-        found_keywords = [k for k in PYMUPDF_KEYWORDS + PDFPLUMBER_KEYWORDS if k.lower() in all_text]
+        # Modified: Extract fields (optional, may return None for missing fields)
+        extracted_fields = extract_fields(all_text)
 
-        if not found_keywords:
-            return JSONResponse(content={"message": "No matching keywords found."}, status_code=200)
+        # Modified: Check for keywords in lowercase text
+        found_keywords = [k for k in PYMUPDF_KEYWORDS + PDFPLUMBER_KEYWORDS if k.lower() in all_text.lower()]
+
+        # Modified: Return early only if no keywords or fields are found
+        if not found_keywords and not any(extracted_fields.values()):
+            return JSONResponse(content={"message": "No matching keywords or fields found."}, status_code=200)
 
         if any(k in found_keywords for k in PYMUPDF_KEYWORDS):
             pdf_file.seek(0)
@@ -526,35 +613,47 @@ async def upload_pdf(file: UploadFile = File(...)):
 
         for keyword in PYMUPDF_KEYWORDS:
             if tables_by_text[keyword]:
-                # Filter rows where no cell is empty (excluding Source_Text, Page_Number)
+                # Modified: Filter rows with no empty cells and no English words
                 valid_rows = [
                     row for row in tables_by_text[keyword]
-                    if all(cell not in ("", None, np.nan) for cell in row[:-2])  # Exclude metadata columns
+                    if all(cell not in ("", None, np.nan) for cell in row[:-2]) and  # No empty cells
+                    all(not has_english_words(cell) for cell in row[:-2])  # No English words
                 ]
                 if not valid_rows:
-                    logger.warning(f"No valid rows for {keyword} after filtering empty cells")
+                    logger.warning(f"No valid rows for {keyword} after filtering empty cells and English words")
                     continue
-        
-                if keyword == "Tabular Detail - Non Guaranteed":
-                    df = pd.DataFrame(
-                        tables_by_text[keyword],
-                        columns=["Total Financial Metrics Sum", "Source_Text", "Page_Number"]
-                    )
-                elif keyword == "Annual Cost Summary":
-                    df = pd.DataFrame(
-                        tables_by_text[keyword],
-                        columns=[COST_SUMMARY_HEADERS[i] for i in [0, 1, 2, 3, 9, 10, 11]] + ["Source_Text", "Page_Number"]
-                    )
-                elif keyword == "Policy Charges and Other Expenses":
-                    df = pd.DataFrame(
-                        tables_by_text[keyword],
-                        columns=[POLICY_CHARGES_HEADERS[i] for i in [0, 1, 2, 3, 7, 8, 9]] + ["Source_Text", "Page_Number"]
-                    )
-                elif keyword == "Current Illustrated Rate*":
-                    df = pd.DataFrame(
-                        tables_by_text[keyword],
-                        columns=[CURRENT_ILLUSTRATED_RATE_HEADERS[9], "Source_Text", "Page_Number"]
-                    )
+                
+                # --- WEDNESDAY ---
+                # Determine the number of data columns (excluding Source_Text and Page_Number)
+                num_data_columns = len(valid_rows[0]) - 2  # Subtract 2 for metadata columns
+                # --- WEDNESDAY ---
+                
+                # --- WEDNESDAY ---
+                # Assign headers based on number of data columns
+                if num_data_columns == 7:
+                    # Use universal header for 7-column tables
+                    headers = UNIVERSAL_HEADER_FOR_SEVEN_COL_TABLES
+                elif num_data_columns == 1:
+                    # Use universal header for 1-column tables
+                    headers = UNIVERSAL_HEADER_FOR_ONE_COL_TABLES
+                else:
+                    # Fallback to existing headers for other cases
+                    if keyword == "Tabular Detail - Non Guaranteed":
+                        headers = ["Total Financial Metrics Sum"]
+                    elif keyword == "Annual Cost Summary":
+                        headers = [COST_SUMMARY_HEADERS[i] for i in [0, 1, 2, 3, 9, 10, 11]]
+                    elif keyword == "Policy Charges and Other Expenses":
+                        headers = [POLICY_CHARGES_HEADERS[i] for i in [0, 1, 2, 3, 7, 8, 9]]
+                    elif keyword == "Current Illustrated Rate*":
+                        headers = [CURRENT_ILLUSTRATED_RATE_HEADERS[9]]
+
+                # Create DataFrame with appropriate headers plus metadata columns
+                df = pd.DataFrame(
+                    valid_rows,
+                    columns=headers + ["Source_Text", "Page_Number"]
+                )
+                # --- WEDNESDAY ---
+
                 if not df.empty:
                     print(f"\nExtracted Table: {keyword} (Combined)")
                     print(df.to_string(index=False))
@@ -582,10 +681,17 @@ async def upload_pdf(file: UploadFile = File(...)):
                             "data": df.replace([np.nan, np.inf, -np.inf], None).to_dict(orient="records")
                         })
                         
-        if not results:
-            return JSONResponse(content={"message": "Keywords matched but no tables extracted."}, status_code=200)
+        # Modified: Include fields in response, even if empty
+        response = {
+            "fields": extracted_fields,
+            "tables": jsonable_encoder(results)
+        }
+        
+        # Modified: Return message if no tables or fields are extracted
+        if not results and not any(extracted_fields.values()):
+            return JSONResponse(content={"message": "No tables or fields extracted."}, status_code=200)
 
-        return JSONResponse(content={"tables": jsonable_encoder(results)}, status_code=200)
+        return JSONResponse(content=response, status_code=200)
 
     except Exception as e:
         logger.error(f"Processing failed: {str(e)}")
