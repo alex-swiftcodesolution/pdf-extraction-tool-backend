@@ -98,54 +98,6 @@ CURRENT_ILLUSTRATED_RATE_HEADERS = [
     "Weighted average interest rate","Accumulated value","Cash surrender value","Net death benefit"
 ]
 
-# ---------------------- Helper Functions ----------------------
-
-# Added: Helper function to check if a cell contains English words (non-numeric/non-currency text)
-def has_english_words(text):
-    """
-    Returns True if the text contains English words (non-numeric, non-currency, non-percentage).
-    Allows numbers, currency ($X,XXX.XX), percentages (X.XX%), and empty strings.
-    """
-    if not text or text in ("", None, np.nan):
-        return False
-    # Remove currency symbols, commas, and percentage signs
-    cleaned = re.sub(r'[\$,%]', '', str(text)).strip()
-    # Check if the remaining text is purely numeric or a decimal
-    return not bool(re.match(r'^-?\d*\.?\d*$', cleaned))
-
-# Added: Function to extract fields (illustration_date, insured_name, etc.)
-def extract_fields(pdf_text):
-    """
-    Extracts specified fields from PDF text using regex patterns.
-    Returns a dictionary with field values or None if not found.
-    """
-    fields = {
-        "illustration_date": None,
-        "insured_name": None,
-        "initial_death_benefit": None,
-        "assumed_ror": None,
-        "minimum_initial_pmt": None
-    }
-    
-    # Normalize text for case-insensitive matching
-    text = pdf_text.lower()
-    
-    # Patterns for each field
-    patterns = {
-        "illustration_date": r"illustration\s*date[:\s]*(\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|\w+\s+\d{1,2},\s+\d{4})",
-        "insured_name": r"insured\s*(?:name)?[:\s]*([a-z\s]+?)(?=\n|$|[a-z\s]*:)",
-        "initial_death_benefit": r"initial\s*death\s*benefit[:\s]*[\$]?([\d,]+\.?\d*)",
-        "assumed_ror": r"assumed\s*ror[:\s]*([\d.]+%)",
-        "minimum_initial_pmt": r"minimum\s*initial\s*pmt[:\s]*[\$]?([\d,]+\.?\d*)"
-    }
-    
-    for field, pattern in patterns.items():
-        match = re.search(pattern, text, re.IGNORECASE)
-        if match:
-            fields[field] = match.group(1).strip()
-    
-    return fields
-
 # ---------------------- PyMuPDF Extraction ----------------------
 
 def extract_projection_table(page):
@@ -358,12 +310,8 @@ def extract_tables_with_flexible_headers(pdf):
                         filtered_headers = [headers[i] for i in selected_indices if i < len(headers)]
                         data_rows = [[row[i] for i in selected_indices if i < len(row)] for row in data_rows]
                         
-                        # Modified: Filter rows with no empty cells and no English words
-                        data_rows = [
-                            row for row in data_rows
-                            if all(cell not in ("", None, np.nan) for cell in row) and
-                            all(not has_english_words(cell) for cell in row)
-                        ]
+                        # Filter rows with no empty cells
+                        data_rows = [row for row in data_rows if all(cell not in ("", None, np.nan) for cell in row)]
                         
                         tables_by_text[keyword].extend([
                             tuple(row + [keyword, page.page_number])
@@ -403,8 +351,6 @@ def extract_tables_with_flexible_headers(pdf):
                             for row in data_rows
                         ]
 
-                        # Modified: Filter out zero or None sums (indicating empty/invalid cells)
-                        summed_values = [val for val in summed_values if val not in (0.0, None, np.nan)]
                         tables_by_text[keyword].extend([
                             (val, keyword, page.page_number)
                             for val in summed_values
@@ -439,12 +385,8 @@ def extract_tables_with_flexible_headers(pdf):
                         filtered_headers = [headers[i] for i in selected_indices if i < len(headers)]
                         data_rows = [[row[i] for i in selected_indices if i < len(row)] for row in data_rows]
                         
-                        # Modified: Filter rows with no empty cells and no English words
-                        data_rows = [
-                            row for row in data_rows
-                            if all(cell not in ("", None, np.nan) for cell in row) and
-                            all(not has_english_words(cell) for cell in row)
-                        ]
+                        # Filter rows with no empty cells
+                        data_rows = [row for row in data_rows if all(cell not in ("", None, np.nan) for cell in row)]
                         
                         tables_by_text[keyword].extend([
                             tuple(row + [keyword, page.page_number])
@@ -496,13 +438,6 @@ def extract_tables_with_flexible_headers(pdf):
                 filtered_headers = [headers[i] for i in selected_indices if i < len(headers)]
                 data_rows = [[row[i] for i in selected_indices if i < len(row)] for row in data_rows]
 
-                # Modified: Filter rows with no empty cells and no English words
-                data_rows = [
-                    row for row in data_rows
-                    if all(cell not in ("", None, np.nan) for cell in row) and
-                    all(not has_english_words(cell) for cell in row)
-                ]
-                
                 keyword = "Policy Charges Ledger"
                 tables_by_text[keyword].extend([
                     (row[0], keyword, min(policy_charges_ledger_pages))
@@ -553,21 +488,15 @@ async def upload_pdf(file: UploadFile = File(...)):
         results = []
         tables_by_text = {k: [] for k in PYMUPDF_KEYWORDS}
 
-        # Modified: Extract all text for both keywords and fields
         all_text = ""
         with fitz.open(stream=pdf_file, filetype="pdf") as doc:
             for page in doc:
-                all_text += page.get_text("text") + "\n"  # Added newline for better pattern matching
+                all_text += page.get_text("text").lower()
         
-        # Modified: Extract fields (optional, may return None for missing fields)
-        extracted_fields = extract_fields(all_text)
+        found_keywords = [k for k in PYMUPDF_KEYWORDS + PDFPLUMBER_KEYWORDS if k.lower() in all_text]
 
-        # Modified: Check for keywords in lowercase text
-        found_keywords = [k for k in PYMUPDF_KEYWORDS + PDFPLUMBER_KEYWORDS if k.lower() in all_text.lower()]
-
-        # Modified: Return early only if no keywords or fields are found
-        if not found_keywords and not any(extracted_fields.values()):
-            return JSONResponse(content={"message": "No matching keywords or fields found."}, status_code=200)
+        if not found_keywords:
+            return JSONResponse(content={"message": "No matching keywords found."}, status_code=200)
 
         if any(k in found_keywords for k in PYMUPDF_KEYWORDS):
             pdf_file.seek(0)
@@ -597,34 +526,33 @@ async def upload_pdf(file: UploadFile = File(...)):
 
         for keyword in PYMUPDF_KEYWORDS:
             if tables_by_text[keyword]:
-                # Modified: Filter rows with no empty cells and no English words
+                # Filter rows where no cell is empty (excluding Source_Text, Page_Number)
                 valid_rows = [
                     row for row in tables_by_text[keyword]
-                    if all(cell not in ("", None, np.nan) for cell in row[:-2]) and  # No empty cells
-                    all(not has_english_words(cell) for cell in row[:-2])  # No English words
+                    if all(cell not in ("", None, np.nan) for cell in row[:-2])  # Exclude metadata columns
                 ]
                 if not valid_rows:
-                    logger.warning(f"No valid rows for {keyword} after filtering empty cells and English words")
+                    logger.warning(f"No valid rows for {keyword} after filtering empty cells")
                     continue
         
                 if keyword == "Tabular Detail - Non Guaranteed":
                     df = pd.DataFrame(
-                        valid_rows,
+                        tables_by_text[keyword],
                         columns=["Total Financial Metrics Sum", "Source_Text", "Page_Number"]
                     )
                 elif keyword == "Annual Cost Summary":
                     df = pd.DataFrame(
-                        valid_rows,
+                        tables_by_text[keyword],
                         columns=[COST_SUMMARY_HEADERS[i] for i in [0, 1, 2, 3, 9, 10, 11]] + ["Source_Text", "Page_Number"]
                     )
                 elif keyword == "Policy Charges and Other Expenses":
                     df = pd.DataFrame(
-                        valid_rows,
+                        tables_by_text[keyword],
                         columns=[POLICY_CHARGES_HEADERS[i] for i in [0, 1, 2, 3, 7, 8, 9]] + ["Source_Text", "Page_Number"]
                     )
                 elif keyword == "Current Illustrated Rate*":
                     df = pd.DataFrame(
-                        valid_rows,
+                        tables_by_text[keyword],
                         columns=[CURRENT_ILLUSTRATED_RATE_HEADERS[9], "Source_Text", "Page_Number"]
                     )
                 if not df.empty:
@@ -654,17 +582,10 @@ async def upload_pdf(file: UploadFile = File(...)):
                             "data": df.replace([np.nan, np.inf, -np.inf], None).to_dict(orient="records")
                         })
                         
-        # Modified: Include fields in response, even if empty
-        response = {
-            "fields": extracted_fields,
-            "tables": jsonable_encoder(results)
-        }
-        
-        # Modified: Return message if no tables or fields are extracted
-        if not results and not any(extracted_fields.values()):
-            return JSONResponse(content={"message": "No tables or fields extracted."}, status_code=200)
+        if not results:
+            return JSONResponse(content={"message": "Keywords matched but no tables extracted."}, status_code=200)
 
-        return JSONResponse(content=response, status_code=200)
+        return JSONResponse(content={"tables": jsonable_encoder(results)}, status_code=200)
 
     except Exception as e:
         logger.error(f"Processing failed: {str(e)}")
