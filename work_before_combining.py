@@ -100,6 +100,8 @@ CURRENT_ILLUSTRATED_RATE_HEADERS = [
 
 # ---------------------- PyMuPDF Extraction ----------------------
 
+# NW
+# --- TUESDAY ---
 def extract_projection_table(page):
     lines = []
     blocks = page.get_text("dict")["blocks"]
@@ -128,7 +130,9 @@ def extract_projection_table(page):
         if sum(c.replace(",", "").replace(".", "").isdigit() for c in row) >= 5:
             table_data.append(row)
 
+    # --- INSERT: Sum columns 4, 5, 6, 7, 8 (0-based: 3, 4, 5, 6, 7) into a custom column ---
     sum_indices = [3, 4, 5, 6, 7]
+    # Calculate sum for each row, handling non-numeric values
     def safe_float(val):
         try:
             return float(val.replace('$', '').replace(',', '').strip())
@@ -140,9 +144,18 @@ def extract_projection_table(page):
         for row in table_data
     ]
 
-    keyword = "Tabular Detail - Non Guaranteed"
-    return [(val, keyword, page.number + 1) for val in summed_values]
+    # Create table_data with only the summed column
+    table_data = [[str(summed_values[idx])] for idx in range(len(table_data))]
+    filtered_headers = ["Total Financial Metrics Sum"]  # Custom column name
+    expected_cols = 1
+    # --- END INSERT ---
 
+    table_data = [row[:expected_cols] + [''] * (expected_cols - len(row)) for row in table_data]
+    return pd.DataFrame(table_data, columns=filtered_headers)
+# --- TUESDAY ---
+
+# NW
+# --- TUESDAY ---
 def extract_cost_summary_table(page):
     lines = []
     blocks = page.get_text("dict")["blocks"]
@@ -171,12 +184,19 @@ def extract_cost_summary_table(page):
         if sum(c.replace(",", "").replace(".", "").isdigit() for c in row) >= 10:
             table_data.append(row)
 
+    # --- INSERT: Filter specific columns (1, 2, 3, 10, 11, 12; 0-based: 0, 1, 2, 9, 10, 11) ---
     selected_indices = [0, 1, 2, 3, 9, 10, 11]
     table_data = [[row[i] for i in selected_indices if i < len(row)] for row in table_data]
-    
-    keyword = "Annual Cost Summary"
-    return [tuple(row + [keyword, page.number + 1]) for row in table_data]
+    expected_cols = len(selected_indices)
+    filtered_headers = [COST_SUMMARY_HEADERS[i] for i in selected_indices if i < len(COST_SUMMARY_HEADERS)]
+    # --- END INSERT ---
 
+    table_data = [row[:expected_cols] + [''] * (expected_cols - len(row)) for row in table_data]
+    return pd.DataFrame(table_data, columns=filtered_headers)
+# --- TUESDAY ---
+
+# LSW
+# --- TUESDAY ---
 def extract_policy_charges_table(page, POLICY_CHARGES_HEADERS):
     def is_numeric_or_currency(text):
         return bool(re.match(r'^-?\$?\d{1,3}(,\d{3})*(\.\d+)?$|^-?\d+(\.\d+)?$', text))
@@ -191,15 +211,17 @@ def extract_policy_charges_table(page, POLICY_CHARGES_HEADERS):
                 if 20 < y < 1000:
                     lines.append((y, span["bbox"][0], span["text"].strip()))
 
+    # --- MODIFY: Sort lines by y-coordinate (top-to-bottom) and then x-coordinate (left-to-right) ---
     lines.sort(key=lambda x: (round(x[0], 1), x[1]))
     table_data, current_row, last_y = [], [], None
     for y, x, text in lines:
-        if last_y is None or abs(y - last_y) < 5:
+        if last_y is None or abs(y - last_y) < 5:  # Group lines within 5 units as a single row
             current_row.append((x, text))
         else:
+            # Sort by x-coordinate to ensure correct column order
             current_row.sort()
             row = [t for _, t in current_row if is_numeric_or_currency(t)]
-            if len(row) >= 3:
+            if len(row) >= 3:  # Ensure row has enough numeric values
                 table_data.append(row)
             current_row = [(x, text)]
         last_y = y
@@ -212,14 +234,31 @@ def extract_policy_charges_table(page, POLICY_CHARGES_HEADERS):
 
     if not table_data:
         logger.info("No valid table data extracted for Policy Charges and Other Expenses")
-        return []
+        return pd.DataFrame()
 
+    # --- MODIFY: Filter specific columns (1, 2, 3, 4, 8, 9, 10; 0-based: 0, 1, 2, 3, 7, 8, 9) ---
     selected_indices = [0, 1, 2, 3, 7, 8, 9]
     table_data = [[row[i] for i in selected_indices if i < len(row)] for row in table_data]
-    
-    keyword = "Policy Charges and Other Expenses"
-    return [tuple(row + [keyword, page.number + 1]) for row in table_data]
+    expected_cols = len(selected_indices)
+    filtered_headers = [POLICY_CHARGES_HEADERS[i] for i in selected_indices if i < len(POLICY_CHARGES_HEADERS)]
+    # --- END MODIFY ---
 
+    # --- MODIFY: Remove row reversal to preserve correct row-column structure ---
+    normalized_data = [
+        row[:expected_cols] + [''] * (expected_cols - len(row))
+        for row in table_data
+    ]
+    # --- END MODIFY ---
+
+    # --- MODIFY: Create DataFrame with correct headers and data ---
+    df = pd.DataFrame(normalized_data, columns=filtered_headers)
+    # --- END MODIFY ---
+    
+    return df
+# --- TUESDAY ---
+
+# LSW
+# --- TUESDAY ---
 def extract_current_illustrated_rate_table(page):
     def is_numeric_or_currency(text):
         return bool(re.match(r'^-?\$?\d{1,3}(,\d{3})*(\.\d+)?$|^-?\d+(\.\d+)?$|^-?\d*\.\d+%?$', text))    
@@ -255,13 +294,23 @@ def extract_current_illustrated_rate_table(page):
             table_data.append(row)
     
     if not table_data:
-        return []
+        return pd.DataFrame()
     
+    # --- INSERT: Filter only column 10 (0-based: 9) ---
     selected_indices = [9]
     table_data = [[row[i] for i in selected_indices if i < len(row)] for row in table_data]
+    expected_cols = len(selected_indices)
+    filtered_headers = [CURRENT_ILLUSTRATED_RATE_HEADERS[i] for i in selected_indices if i < len(CURRENT_ILLUSTRATED_RATE_HEADERS)]
+    # --- END INSERT ---
+
+    normalized_data = [
+        row[:expected_cols] + [''] * (expected_cols - len(row))
+        for row in table_data
+    ]
     
-    keyword = "Current Illustrated Rate*"
-    return [tuple(row + [keyword, page.number + 1]) for row in table_data]
+    df = pd.DataFrame(normalized_data, columns=filtered_headers)
+    return df
+# --- TUESDAY ---
 
 # ------------------- pdfplumber Flexible Logic ------------------
 
@@ -306,15 +355,18 @@ def extract_tables_with_flexible_headers(pdf):
                                 continue
                         data_rows = [row[:len(headers)] + [""] * (len(headers) - len(row)) for row in data_rows]
 
+                        # --- INSERT: Filter specific columns (1, 2, 3, 4, 11, 12, 13; 0-based: 0, 1, 2, 3, 10, 11, 12) ---
                         selected_indices = [0, 1, 2, 3, 9, 10, 11]
                         filtered_headers = [headers[i] for i in selected_indices if i < len(headers)]
                         data_rows = [[row[i] for i in selected_indices if i < len(row)] for row in data_rows]
+                        # --- END INSERT ---
 
-                        tables_by_text[keyword].extend([
-                            tuple(row + [keyword, page.page_number])
-                            for row in data_rows
-                        ])
-
+                        df = pd.DataFrame(data_rows, columns=filtered_headers)
+                        df["Source_Text"] = keyword
+                        df["Page_Number"] = page.page_number
+                        if not df.empty:
+                            tables_by_text[keyword].append(df)
+                            
                     elif keyword.lower() == "your policy's current charges summary":
                         headers = POLICY_CURRENT_CHARGES_SUMMARY_HEADERS
                         cleaned = [row for row in cleaned if any(cell for cell in row)]
@@ -332,12 +384,17 @@ def extract_tables_with_flexible_headers(pdf):
                                 logger.info(f"No data rows remain after skipping top 3 rows on page {page.page_number}")
                                 continue
 
+                        # --- Calculate summed values for columns 4, 5, 6, 7 (0-based: 3, 4, 5, 6) ---
                         sum_indices = [3, 4, 5, 6]
                         def safe_float(val):
                             try:
+                                # Ensure val is a string and strip whitespace
                                 val = str(val).strip()
+                                # Check if value is enclosed in parentheses
                                 if val.startswith('(') and val.endswith(')'):
+                                    # Remove parentheses and prepend minus sign
                                     val = '-' + val[1:-1]
+                                # Remove $ and , characters
                                 val = val.replace('$', '').replace(',', '')
                                 return float(val)
                             except (ValueError, AttributeError):
@@ -348,11 +405,13 @@ def extract_tables_with_flexible_headers(pdf):
                             for row in data_rows
                         ]
 
-                        tables_by_text[keyword].extend([
-                            (val, keyword, page.page_number)
-                            for val in summed_values
-                        ])
-
+                        # --- Create DataFrame with only the summed values column ---
+                        df = pd.DataFrame(summed_values, columns=["Total Charges Sum"])
+                        df["Source_Text"] = keyword
+                        df["Page_Number"] = page.page_number
+                        if not df.empty:
+                            tables_by_text[keyword].append(df)
+                            
                     elif keyword.lower() == "basic ledger, non-guaranteed scenario":
                         cleaned = [row for row in cleaned if any(cell for cell in row)]
                         header_keywords = {"year", "age"}
@@ -378,18 +437,60 @@ def extract_tables_with_flexible_headers(pdf):
                         data_rows = cleaned[header_row_index + 1:]
                         data_rows = [row + [""] * (len(headers) - len(row)) for row in data_rows]
 
+                        # --- INSERT: Filter specific columns (1, 2, 3, 4, 8, 9, 10; 0-based: 0, 1, 2, 3, 7, 8, 9) ---
                         selected_indices = [0, 1, 2, 3, 7, 8, 9]
-                        filtered_headers = [headers[i] for i in selected_indices if i < len(headers)]
+                        headers = [headers[i] for i in selected_indices if i < len(headers)]
                         data_rows = [[row[i] for i in selected_indices if i < len(row)] for row in data_rows]
+                        # --- END INSERT ---
 
-                        tables_by_text[keyword].extend([
-                            tuple(row + [keyword, page.page_number])
-                            for row in data_rows
-                        ])
+                        df = pd.DataFrame(data_rows, columns=headers)
+                        df["Source_Text"] = keyword
+                        df["Page_Number"] = page.page_number
+                        if not df.empty:
+                            tables_by_text[keyword].append(df)
 
                     elif keyword.lower() == "policy charges ledger":
                         policy_charges_ledger_rows.extend(cleaned)
                         policy_charges_ledger_pages.append(page.page_number)
+
+                    else:
+                        cleaned = [row for row in cleaned if any(cell for cell in row)]
+                        header_keywords = {"year", "age"}
+                        header_row_index = -1
+                        for idx, row in enumerate(cleaned[:6]):
+                            normalized = [cell.lower() for cell in row]
+                            if any(any(kw in cell for kw in header_keywords) for cell in normalized):
+                                header_row_index = idx
+                                break
+
+                        if header_row_index == -1:
+                            continue
+
+                        header_rows = cleaned[max(0, header_row_index - 2):header_row_index + 1]
+                        max_cols = max(len(row) for row in header_rows)
+                        df_header = pd.DataFrame([row + [""] * (max_cols - len(row)) for row in header_rows]).ffill(axis=1)
+
+                        headers = [
+                            " ".join(str(df_header.iloc[row_idx, col_idx]).strip() for row_idx in range(len(df_header)))
+                            for col_idx in range(df_header.shape[1])
+                        ]
+
+                        def deduplicate_headers(headers):
+                            counts = Counter()
+                            result = []
+                            for h in headers:
+                                counts[h] += 1
+                                result.append(f"{h}_{counts[h]}" if counts[h] > 1 else h)
+                            return result
+
+                        headers = deduplicate_headers(headers)
+                        data_rows = cleaned[header_row_index + 1:]
+                        data_rows = [row + [""] * (len(headers) - len(row)) for row in data_rows]
+                        df = pd.DataFrame(data_rows, columns=headers)
+                        df["Source_Text"] = keyword
+                        df["Page_Number"] = page.page_number
+                        if not df.empty:
+                            tables_by_text[keyword].append(df)
 
     if policy_charges_ledger_rows:
         cleaned = [row for row in policy_charges_ledger_rows if any(cell.strip() for cell in row)]
@@ -428,48 +529,19 @@ def extract_tables_with_flexible_headers(pdf):
                 data_rows = cleaned[header_row_index + 1:]
                 data_rows = [row + [""] * (len(headers) - len(row)) for row in data_rows]
                 
+                # --- INSERT: Filter only column 10 (0-based: 9) ---
                 selected_indices = [9]
-                filtered_headers = [headers[i] for i in selected_indices if i < len(headers)]
+                headers = [headers[i] for i in selected_indices if i < len(headers)]
                 data_rows = [[row[i] for i in selected_indices if i < len(row)] for row in data_rows]
+                # --- END INSERT ---
+                
+                df = pd.DataFrame(data_rows, columns=headers)
+                df["Source_Text"] = "Policy Charges Ledger"
+                df["Page_Number"] = min(policy_charges_ledger_pages)
+                if not df.empty:
+                    tables_by_text["Policy Charges Ledger"].append(df)
 
-                keyword = "Policy Charges Ledger"
-                tables_by_text[keyword].extend([
-                    (row[0], keyword, min(policy_charges_ledger_pages))
-                    for row in data_rows
-                ])
-
-    combined_tables = {}
-    for keyword in PDFPLUMBER_KEYWORDS:
-        if tables_by_text[keyword]:
-            if keyword.lower() == "your policy's current charges summary":
-                df = pd.DataFrame(
-                    tables_by_text[keyword],
-                    columns=["Total Charges Sum", "Source_Text", "Page_Number"]
-                )
-            elif keyword.lower() == "policy charges ledger":
-                df = pd.DataFrame(
-                    tables_by_text[keyword],
-                    columns=[filtered_headers[0] if filtered_headers else "Column_10", "Source_Text", "Page_Number"]
-                )
-            else:
-                selected_indices = {
-                    "your policy's illustrated values": [0, 1, 2, 3, 9, 10, 11],
-                    "basic ledger, non-guaranteed scenario": [0, 1, 2, 3, 7, 8, 9]
-                }.get(keyword.lower(), [0, 1, 2, 3])
-                headers = {
-                    "your policy's illustrated values": ILLUSTRATED_VALUES_HEADERS,
-                    "basic ledger, non-guaranteed scenario": headers if keyword.lower() == "basic ledger, non-guaranteed scenario" else ["Year", "Age", "Premium Outlay", "Net Outlay"]
-                }.get(keyword.lower(), ["Year", "Age", "Premium Outlay", "Net Outlay"])
-                filtered_headers = [headers[i] for i in selected_indices if i < len(headers)]
-                df = pd.DataFrame(
-                    tables_by_text[keyword],
-                    columns=filtered_headers + ["Source_Text", "Page_Number"]
-                )
-            combined_tables[keyword] = df if not df.empty else None
-        else:
-            combined_tables[keyword] = None
-
-    return combined_tables
+    return tables_by_text
 
 # --------------------------- Main API ---------------------------
 
@@ -480,8 +552,8 @@ async def upload_pdf(file: UploadFile = File(...)):
         pdf_file = BytesIO(content)
 
         results = []
-        tables_by_text = {k: [] for k in PYMUPDF_KEYWORDS}
 
+        # Detect keywords first
         all_text = ""
         with fitz.open(stream=pdf_file, filetype="pdf") as doc:
             for page in doc:
@@ -492,6 +564,7 @@ async def upload_pdf(file: UploadFile = File(...)):
         if not found_keywords:
             return JSONResponse(content={"message": "No matching keywords found."}, status_code=200)
 
+        # PyMuPDF processing
         if any(k in found_keywords for k in PYMUPDF_KEYWORDS):
             pdf_file.seek(0)
             with fitz.open(stream=pdf_file, filetype="pdf") as doc:
@@ -499,73 +572,84 @@ async def upload_pdf(file: UploadFile = File(...)):
                     text = page.get_text("text").lower()
 
                     if "tabular detail - non guaranteed" in text:
-                        data = extract_projection_table(page)
-                        if data:
-                            tables_by_text["Tabular Detail - Non Guaranteed"].extend(data)
+                        df = extract_projection_table(page)
+                        if not df.empty:
+                            # --- NEW: Print the extracted table to console ---
+                            print(f"\nExtracted Table: Tabular Detail - Non Guaranteed (Page {page_num + 1})")
+                            print(df.to_string(index=False))  # Print DataFrame in a readable format
+                            # --- END NEW ---
+                            results.append({
+                                "source": "Tabular Detail - Non Guaranteed",
+                                "page": page_num + 1,
+                                "keyword": "Tabular Detail - Non Guaranteed",
+                                "extractor": "PyMuPDF",
+                                "data": df.replace([np.nan, np.inf, -np.inf], None).to_dict(orient="records")
+                            })
 
                     if "annual cost summary" in text:
-                        data = extract_cost_summary_table(page)
-                        if data:
-                            tables_by_text["Annual Cost Summary"].extend(data)
-
+                        df = extract_cost_summary_table(page)
+                        if not df.empty:
+                            # --- NEW: Print the extracted table to console ---
+                            print(f"\nExtracted Table: Annual Cost Summary (Page {page_num + 1})")
+                            print(df.to_string(index=False))  # Print DataFrame in a readable format
+                            # --- END NEW ---
+                            results.append({
+                                "source": "Annual Cost Summary",
+                                "page": page_num + 1,
+                                "keyword": "Annual Cost Summary",
+                                "extractor": "PyMuPDF",
+                                "data": df.replace([np.nan, np.inf, -np.inf], None).to_dict(orient="records")
+                            })
+                            
                     if "policy charges and other expenses" in text.lower():
-                        data = extract_policy_charges_table(page, POLICY_CHARGES_HEADERS)
-                        if data:
-                            tables_by_text["Policy Charges and Other Expenses"].extend(data)
-
+                        df = extract_policy_charges_table(page, POLICY_CHARGES_HEADERS)
+                        if not df.empty:
+                            # --- NEW: Print the extracted table to console ---
+                            print(f"\nExtracted Table: Policy Charges and Other Expenses (Page {page_num + 1})")
+                            print(df.to_string(index=False))  # Print DataFrame in a readable format
+                            # --- END NEW ---
+                            results.append({
+                                "source": "Policy Charges and Other Expenses",
+                                "page": page_num + 1,
+                                "keyword": "Policy Charges and Other Expenses",
+                                "extractor": "PyMuPDF",
+                                "data": df.replace([np.nan, np.inf, -np.inf], None).to_dict(orient="records")
+                            })
+                            
                     if "current illustrated rate*" in text.lower():
-                        data = extract_current_illustrated_rate_table(page)
-                        if data:
-                            tables_by_text["Current Illustrated Rate*"].extend(data)
+                        df = extract_current_illustrated_rate_table(page)
+                        if not df.empty:
+                            # --- NEW: Print the extracted table to console ---
+                            print(f"\nExtracted Table: Current Illustrated Rate* (Page {page_num + 1})")
+                            print(df.to_string(index=False))  # Print DataFrame in a readable format
+                            # --- END NEW ---
+                            results.append({
+                                "source": "Current Illustrated Rate*",
+                                "page": page_num + 1,
+                                "keyword": "Current Illustrated Rate*",
+                                "extractor": "PyMuPDF",
+                                "data": df.replace([np.nan, np.inf, -np.inf], None).to_dict(orient="records")
+                            })
 
-        for keyword in PYMUPDF_KEYWORDS:
-            if tables_by_text[keyword]:
-                if keyword == "Tabular Detail - Non Guaranteed":
-                    df = pd.DataFrame(
-                        tables_by_text[keyword],
-                        columns=["Total Financial Metrics Sum", "Source_Text", "Page_Number"]
-                    )
-                elif keyword == "Annual Cost Summary":
-                    df = pd.DataFrame(
-                        tables_by_text[keyword],
-                        columns=[COST_SUMMARY_HEADERS[i] for i in [0, 1, 2, 3, 9, 10, 11]] + ["Source_Text", "Page_Number"]
-                    )
-                elif keyword == "Policy Charges and Other Expenses":
-                    df = pd.DataFrame(
-                        tables_by_text[keyword],
-                        columns=[POLICY_CHARGES_HEADERS[i] for i in [0, 1, 2, 3, 7, 8, 9]] + ["Source_Text", "Page_Number"]
-                    )
-                elif keyword == "Current Illustrated Rate*":
-                    df = pd.DataFrame(
-                        tables_by_text[keyword],
-                        columns=[CURRENT_ILLUSTRATED_RATE_HEADERS[9], "Source_Text", "Page_Number"]
-                    )
-                if not df.empty:
-                    print(f"\nExtracted Table: {keyword} (Combined)")
-                    print(df.to_string(index=False))
-                    results.append({
-                        "source": keyword,
-                        "page": int(df["Page_Number"].min()),
-                        "keyword": keyword,
-                        "extractor": "PyMuPDF",
-                        "data": df.replace([np.nan, np.inf, -np.inf], None).to_dict(orient="records")
-                    })
-
+        # pdfplumber processing
         if any(k in found_keywords for k in PDFPLUMBER_KEYWORDS):
             pdf_file.seek(0)
             with pdfplumber.open(pdf_file) as pdf:
                 tables = extract_tables_with_flexible_headers(pdf)
-                for source_text, df in tables.items():
-                    if df is not None and not df.empty:
-                        print(f"\nExtracted Table: {source_text} (Combined)")
-                        print(df.to_string(index=False))
-                        results.append({
-                            "source": source_text,
-                            "page": int(df["Page_Number"].min()),
-                            "keyword": source_text,
-                            "extractor": "pdfplumber",
-                            "data": df.replace([np.nan, np.inf, -np.inf], None).to_dict(orient="records")
-                        })
+                for source_text, df_list in tables.items():
+                    for df in df_list:
+                        if not df.empty:
+                            # --- NEW: Print the extracted table to console ---
+                            print(f"\nExtracted Table: {source_text} (Page {int(df['Page_Number'].iloc[0])})")
+                            print(df.to_string(index=False))  # Print DataFrame in a readable format
+                            # --- END NEW ---
+                            results.append({
+                                "source": source_text,
+                                "page": int(df["Page_Number"].iloc[0]),
+                                "keyword": source_text,
+                                "extractor": "pdfplumber",
+                                "data": df.replace([np.nan, np.inf, -np.inf], None).to_dict(orient="records")
+                            })
 
         if not results:
             return JSONResponse(content={"message": "Keywords matched but no tables extracted."}, status_code=200)
