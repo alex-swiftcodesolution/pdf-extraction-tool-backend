@@ -62,7 +62,7 @@ COST_SUMMARY_HEADERS = [
 ILLUSTRATED_VALUES_HEADERS = [
     "Year","Age","Premium Outlay","Net Outlay",
     "[Guaranteed Values][2.00% crediting rate and maximum charges]Surrender Value",
-    "[Guaranteed Values][2.00% crediting rate and maximum charges]Death Benefit",
+    "[Guaranteed Values][2.00% crediting rate and maximum charges]Surrender Value",
     "[Non-Guaranteed Values][4.25% alternative crediting rate and current charges]Cash Value",
     "[Non-Guaranteed Values][4.25% alternative crediting rate and current charges]Surrender Value",
     "[Non-Guaranteed Values][4.25% alternative crediting rate and current charges]Death Benefit",
@@ -215,7 +215,7 @@ def extract_cost_summary_table(page):
             table_data.append(row)
 
     # --- INSERT: Filter specific columns (1, 2, 3, 10, 11, 12; 0-based: 0, 1, 2, 9, 10, 11) ---
-    selected_indices = [0, 1, 2, 3, 9, 10, 11]
+    selected_indices = [0, 1, 2, 9, 10, 11]
     table_data = [[row[i] for i in selected_indices if i < len(row)] for row in table_data]
     expected_cols = len(selected_indices)
     filtered_headers = [COST_SUMMARY_HEADERS[i] for i in selected_indices if i < len(COST_SUMMARY_HEADERS)]
@@ -368,7 +368,7 @@ def extract_tables_with_flexible_headers(pdf):
                         continue
 
                     if keyword.lower() == "your policy's illustrated values":
-                        headers = ILLUSTRATED_VALUES_HEADERS
+                        # headers = ILLUSTRATED_VALUES_HEADERS
                         cleaned = [row for row in cleaned if any(cell for cell in row)]
                         if len(cleaned) < 5:
                             logger.warning(f"Table on page {page.page_number} has {len(cleaned)} rows, cannot skip 5 rows")
@@ -386,7 +386,7 @@ def extract_tables_with_flexible_headers(pdf):
                         data_rows = [row[:len(headers)] + [""] * (len(headers) - len(row)) for row in data_rows]
 
                         # --- INSERT: Filter specific columns (1, 2, 3, 4, 11, 12, 13; 0-based: 0, 1, 2, 3, 10, 11, 12) ---
-                        selected_indices = [0, 1, 2, 3, 9, 10, 11]
+                        selected_indices = [0, 1, 2, 3, 10, 11, 12]
                         filtered_headers = [headers[i] for i in selected_indices if i < len(headers)]
                         data_rows = [[row[i] for i in selected_indices if i < len(row)] for row in data_rows]
                         # --- END INSERT ---
@@ -396,7 +396,7 @@ def extract_tables_with_flexible_headers(pdf):
                         df["Page_Number"] = page.page_number
                         if not df.empty:
                             tables_by_text[keyword].append(df)
-                            
+
                     elif keyword.lower() == "your policy's current charges summary":
                         headers = POLICY_CURRENT_CHARGES_SUMMARY_HEADERS
                         cleaned = [row for row in cleaned if any(cell for cell in row)]
@@ -413,20 +413,14 @@ def extract_tables_with_flexible_headers(pdf):
                             if not data_rows:
                                 logger.info(f"No data rows remain after skipping top 3 rows on page {page.page_number}")
                                 continue
+                        data_rows = [row[:len(headers)] + [""] * (len(headers) - len(row)) for row in data_rows]
 
-                        # --- Calculate summed values for columns 4, 5, 6, 7 (0-based: 3, 4, 5, 6) ---
+                        # --- INSERT: Sum columns 4, 5, 6, 7 (0-based: 3, 4, 5, 6) into a custom column, exclude them ---
                         sum_indices = [3, 4, 5, 6]
+                        # Calculate sum for each row, handling non-numeric values
                         def safe_float(val):
                             try:
-                                # Ensure val is a string and strip whitespace
-                                val = str(val).strip()
-                                # Check if value is enclosed in parentheses
-                                if val.startswith('(') and val.endswith(')'):
-                                    # Remove parentheses and prepend minus sign
-                                    val = '-' + val[1:-1]
-                                # Remove $ and , characters
-                                val = val.replace('$', '').replace(',', '')
-                                return float(val)
+                                return float(val.replace('$', '').replace(',', '').strip())
                             except (ValueError, AttributeError):
                                 return 0.0
                         
@@ -434,9 +428,19 @@ def extract_tables_with_flexible_headers(pdf):
                             sum(safe_float(row[i]) for i in sum_indices if i < len(row))
                             for row in data_rows
                         ]
+                        
+                        # Select all columns except sum_indices, then append summed column
+                        filtered_indices = [i for i in range(len(headers)) if i not in sum_indices]
+                        filtered_headers = [headers[i] for i in filtered_indices]
+                        filtered_headers.append("Total Charges Sum")  # Custom column name
+                        
+                        data_rows = [
+                            [row[i] for i in filtered_indices if i < len(row)] + [str(summed_values[idx])]
+                            for idx, row in enumerate(data_rows)
+                        ]
+                        # --- END INSERT ---
 
-                        # --- Create DataFrame with only the summed values column ---
-                        df = pd.DataFrame(summed_values, columns=["Total Charges Sum"])
+                        df = pd.DataFrame(data_rows, columns=filtered_headers)
                         df["Source_Text"] = keyword
                         df["Page_Number"] = page.page_number
                         if not df.empty:
