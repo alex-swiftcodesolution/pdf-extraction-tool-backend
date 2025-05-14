@@ -309,7 +309,10 @@ def extract_tables_with_flexible_headers(pdf):
                         selected_indices = [0, 1, 2, 3, 9, 10, 11]
                         filtered_headers = [headers[i] for i in selected_indices if i < len(headers)]
                         data_rows = [[row[i] for i in selected_indices if i < len(row)] for row in data_rows]
-
+                        
+                        # Filter rows with no empty cells
+                        data_rows = [row for row in data_rows if all(cell not in ("", None, np.nan) for cell in row)]
+                        
                         tables_by_text[keyword].extend([
                             tuple(row + [keyword, page.page_number])
                             for row in data_rows
@@ -381,7 +384,10 @@ def extract_tables_with_flexible_headers(pdf):
                         selected_indices = [0, 1, 2, 3, 7, 8, 9]
                         filtered_headers = [headers[i] for i in selected_indices if i < len(headers)]
                         data_rows = [[row[i] for i in selected_indices if i < len(row)] for row in data_rows]
-
+                        
+                        # Filter rows with no empty cells
+                        data_rows = [row for row in data_rows if all(cell not in ("", None, np.nan) for cell in row)]
+                        
                         tables_by_text[keyword].extend([
                             tuple(row + [keyword, page.page_number])
                             for row in data_rows
@@ -520,6 +526,15 @@ async def upload_pdf(file: UploadFile = File(...)):
 
         for keyword in PYMUPDF_KEYWORDS:
             if tables_by_text[keyword]:
+                # Filter rows where no cell is empty (excluding Source_Text, Page_Number)
+                valid_rows = [
+                    row for row in tables_by_text[keyword]
+                    if all(cell not in ("", None, np.nan) for cell in row[:-2])  # Exclude metadata columns
+                ]
+                if not valid_rows:
+                    logger.warning(f"No valid rows for {keyword} after filtering empty cells")
+                    continue
+        
                 if keyword == "Tabular Detail - Non Guaranteed":
                     df = pd.DataFrame(
                         tables_by_text[keyword],
