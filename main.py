@@ -492,7 +492,7 @@ async def upload_pdf(file: UploadFile = File(...)):
         with fitz.open(stream=pdf_file, filetype="pdf") as doc:
             for page in doc:
                 all_text += page.get_text("text").lower()
-
+        
         found_keywords = [k for k in PYMUPDF_KEYWORDS + PDFPLUMBER_KEYWORDS if k.lower() in all_text]
 
         if not found_keywords:
@@ -581,7 +581,7 @@ async def upload_pdf(file: UploadFile = File(...)):
                             "extractor": "pdfplumber",
                             "data": df.replace([np.nan, np.inf, -np.inf], None).to_dict(orient="records")
                         })
-
+                        
         if not results:
             return JSONResponse(content={"message": "Keywords matched but no tables extracted."}, status_code=200)
 
