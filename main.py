@@ -534,7 +534,7 @@ def extract_tables_with_flexible_headers(pdf):
                 data_rows = cleaned[header_row_index + 1:]
                 data_rows = [row + [""] * (len(headers) - len(row)) for row in data_rows]
                 
-                selected_indices = [0, 1, 2, 3, 7, 8, 9]
+                selected_indices = [9]
                 filtered_headers = [headers[i] for i in selected_indices if i < len(headers)]
                 data_rows = [[row[i] for i in selected_indices if i < len(row)] for row in data_rows]
 
