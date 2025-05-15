@@ -233,13 +233,19 @@ def extract_cost_summary_table(page):
     keyword = "Annual Cost Summary"
     return [tuple(row + [keyword, page.number + 1]) for row in table_data]
 
+# --- CHATGPT ---
 def extract_policy_charges_table(page, POLICY_CHARGES_HEADERS):
+    import re
+    import logging
+
+    logger = logging.getLogger(__name__)
+
     def is_numeric_or_currency(text):
         return bool(re.match(r'^-?\$?\d{1,3}(,\d{3})*(\.\d+)?$|^-?\d+(\.\d+)?$', text))
-    
+
     lines = []
     blocks = page.get_text("dict")["blocks"]
-    
+
     for block in blocks:
         for line in block.get("lines", []):
             for span in line["spans"]:
@@ -248,6 +254,7 @@ def extract_policy_charges_table(page, POLICY_CHARGES_HEADERS):
                     lines.append((y, span["bbox"][0], span["text"].strip()))
 
     lines.sort(key=lambda x: (round(x[0], 1), x[1]))
+
     table_data, current_row, last_y = [], [], None
     for y, x, text in lines:
         if last_y is None or abs(y - last_y) < 5:
@@ -270,11 +277,27 @@ def extract_policy_charges_table(page, POLICY_CHARGES_HEADERS):
         logger.info("No valid table data extracted for Policy Charges and Other Expenses")
         return []
 
-    selected_indices = [0, 1, 2, 3, 7, 8, 9]
-    table_data = [[row[i] for i in selected_indices if i < len(row)] for row in table_data]
-    
-    keyword = "Policy Charges and Other Expenses"
-    return [tuple(row + [keyword, page.number + 1]) for row in table_data]
+    # 🔁 Transpose: rows -> columns
+    transposed_data = list(map(list, zip(*table_data)))
+
+    # 🔄 Reverse each row of the transposed table to make the last column the first
+    reversed_data = [row[::-1] for row in transposed_data]
+
+    # 🪵 Log the reversed table
+    logger.info("Reversed Policy Charges Table:")
+    for i, row in enumerate(reversed_data):
+        logger.info(f"Row {i + 1}: {row}")
+
+    # Select only the desired columns: 1, 2, 3, 4, 8, 9, 10
+    selected_columns = [row[:4] + row[7:10] for row in reversed_data]
+
+    # 🪵 Log the selected columns table
+    logger.info("Selected Columns from Reversed Policy Charges Table:")
+    for i, row in enumerate(selected_columns):
+        logger.info(f"Row {i + 1}: {row}")
+
+    return selected_columns
+# --- CHATGPT ---
 
 def extract_current_illustrated_rate_table(page):
     def is_numeric_or_currency(text):
@@ -291,6 +314,7 @@ def extract_current_illustrated_rate_table(page):
                     lines.append((y, span["bbox"][0], span["text"].strip()))
 
     lines.sort(key=lambda x: (round(x[0], 1), x[1]))
+    
     table_data, current_row, last_y = [], [], None
     for y, x, text in lines:
         if last_y is None or abs(y - last_y) < 6:
@@ -317,7 +341,7 @@ def extract_current_illustrated_rate_table(page):
     table_data = [[row[i] for i in selected_indices if i < len(row)] for row in table_data]
     
     keyword = "Current Illustrated Rate*"
-    return [tuple(row + [keyword, page.number + 1]) for row in table_data]
+    return [tuple(row + ["", page.number + 1]) for row in table_data]
 
 # ------------------- pdfplumber Flexible Logic ------------------
 
@@ -600,11 +624,22 @@ async def upload_pdf(file: UploadFile = File(...)):
                         data = extract_cost_summary_table(page)
                         if data:
                             tables_by_text["Annual Cost Summary"].extend(data)
-
+                    
+                    # --- CHATGPT ---
                     if "policy charges and other expenses" in text.lower():
                         data = extract_policy_charges_table(page, POLICY_CHARGES_HEADERS)
                         if data:
-                            tables_by_text["Policy Charges and Other Expenses"].extend(data)
+                            # Validate and add metadata columns
+                            data_with_metadata = [
+                                row + ["Policy Charges and Other Expenses", page_num + 1]
+                                for row in data if len(row) == 7
+                            ]
+                            if not data_with_metadata:
+                                logger.warning("No valid rows with 7 columns for Policy Charges and Other Expenses")
+                            else:
+                                logger.info(f"Appending {len(data_with_metadata)} rows with 9 columns for Policy Charges and Other Expenses")
+                                tables_by_text["Policy Charges and Other Expenses"].extend(data_with_metadata)
+                    # --- CHATGPT ---
 
                     if "current illustrated rate*" in text.lower():
                         data = extract_current_illustrated_rate_table(page)
@@ -614,11 +649,17 @@ async def upload_pdf(file: UploadFile = File(...)):
         for keyword in PYMUPDF_KEYWORDS:
             if tables_by_text[keyword]:
                 # Modified: Filter rows with no empty cells and no English words
-                valid_rows = [
-                    row for row in tables_by_text[keyword]
-                    if all(cell not in ("", None, np.nan) for cell in row[:-2]) and  # No empty cells
-                    all(not has_english_words(cell) for cell in row[:-2])  # No English words
-                ]
+                if keyword == "Policy Charges and Other Expenses":
+                    valid_rows = [
+                        row for row in tables_by_text[keyword]
+                        if all(cell not in ("", None, np.nan) for cell in row[:-2])  # No empty cells
+                    ]
+                else:
+                    valid_rows = [
+                        row for row in tables_by_text[keyword]
+                        if all(cell not in ("", None, np.nan) for cell in row[:-2]) and  # No empty cells
+                        all(not has_english_words(cell) for cell in row[:-2])  # No English words
+                    ]
                 if not valid_rows:
                     logger.warning(f"No valid rows for {keyword} after filtering empty cells and English words")
                     continue

@@ -28,8 +28,8 @@ logger = logging.getLogger(__name__)
 
 PYMUPDF_KEYWORDS = [
     # NW
-    "Annual Cost Summary",
     "Tabular Detail - Non Guaranteed",
+    "Annual Cost Summary",
     # LSW
     "Policy Charges and Other Expenses",
     "Current Illustrated Rate*" 
@@ -156,7 +156,7 @@ def extract_fields(pdf_text):
 
 # ---------------------- PyMuPDF Extraction ----------------------
 
-def extract_projection_table(page):
+def extract_tabular_detail_non_guaranteed(page):
     lines = []
     blocks = page.get_text("dict")["blocks"]
     for block in blocks:
@@ -184,22 +184,20 @@ def extract_projection_table(page):
         if sum(c.replace(",", "").replace(".", "").isdigit() for c in row) >= 5:
             table_data.append(row)
 
-    sum_indices = [3, 4, 5, 6, 7]
-    def safe_float(val):
-        try:
-            return float(val.replace('$', '').replace(',', '').strip())
-        except (ValueError, AttributeError):
-            return 0.0
-    
-    summed_values = [
-        sum(safe_float(row[i]) for i in sum_indices if i < len(row))
-        for row in table_data
+    selected_indices = [0, 1, 2, 3, 9, 10, 11]
+    table_data = [[row[i] for i in selected_indices if i < len(row)] for row in table_data]
+
+    # Filter rows with no empty cells and no English words
+    table_data = [
+        row for row in table_data
+        if all(cell not in ("", None, np.nan) for cell in row) and
+        all(not has_english_words(cell) for cell in row)
     ]
 
     keyword = "Tabular Detail - Non Guaranteed"
-    return [(val, keyword, page.number + 1) for val in summed_values]
+    return [tuple(row + [keyword, page.number + 1]) for row in table_data]
 
-def extract_cost_summary_table(page):
+def extract_annual_cost_summary(page):
     lines = []
     blocks = page.get_text("dict")["blocks"]
     for block in blocks:
@@ -227,11 +225,23 @@ def extract_cost_summary_table(page):
         if sum(c.replace(",", "").replace(".", "").isdigit() for c in row) >= 10:
             table_data.append(row)
 
-    selected_indices = [0, 1, 2, 3, 9, 10, 11]
-    table_data = [[row[i] for i in selected_indices if i < len(row)] for row in table_data]
-    
+    sum_indices = [3, 4, 5, 7]
+    def safe_float(val):
+        try:
+            return float(val.replace('$', '').replace(',', '').strip())
+        except (ValueError, AttributeError):
+            return 0.0
+
+    summed_values = [
+        sum(safe_float(row[i]) for i in sum_indices if i < len(row))
+        for row in table_data
+    ]
+
+    # Filter out zero or None sums
+    summed_values = [val for val in summed_values if val not in (0.0, None, np.nan)]
+
     keyword = "Annual Cost Summary"
-    return [tuple(row + [keyword, page.number + 1]) for row in table_data]
+    return [(val, keyword, page.number + 1) for val in summed_values]
 
 # --- CHATGPT ---
 def extract_policy_charges_table(page, POLICY_CHARGES_HEADERS):
@@ -524,7 +534,7 @@ def extract_tables_with_flexible_headers(pdf):
                 data_rows = cleaned[header_row_index + 1:]
                 data_rows = [row + [""] * (len(headers) - len(row)) for row in data_rows]
                 
-                selected_indices = [9]
+                selected_indices = [0, 1, 2, 3, 7, 8, 9]
                 filtered_headers = [headers[i] for i in selected_indices if i < len(headers)]
                 data_rows = [[row[i] for i in selected_indices if i < len(row)] for row in data_rows]
 
@@ -537,7 +547,7 @@ def extract_tables_with_flexible_headers(pdf):
                 
                 keyword = "Policy Charges Ledger"
                 tables_by_text[keyword].extend([
-                    (row[0], keyword, min(policy_charges_ledger_pages))
+                    tuple(row + [keyword, min(policy_charges_ledger_pages)])
                     for row in data_rows
                 ])
 
@@ -614,21 +624,16 @@ async def upload_pdf(file: UploadFile = File(...)):
             with fitz.open(stream=pdf_file, filetype="pdf") as doc:
                 for page_num, page in enumerate(doc):
                     text = page.get_text("text").lower()
-
-                    if "tabular detail - non guaranteed" in text:
-                        data = extract_projection_table(page)
-                        if data:
-                            tables_by_text["Tabular Detail - Non Guaranteed"].extend(data)
-
+                    
                     if "annual cost summary" in text:
-                        data = extract_cost_summary_table(page)
+                        data = extract_annual_cost_summary(page)
                         if data:
                             tables_by_text["Annual Cost Summary"].extend(data)
 
-                    # if "policy charges and other expenses" in text.lower():
-                    #     data = extract_policy_charges_table(page, POLICY_CHARGES_HEADERS)
-                    #     if data:
-                    #         tables_by_text["Policy Charges and Other Expenses"].extend(data)
+                    if "tabular detail - non guaranteed" in text:
+                        data = extract_tabular_detail_non_guaranteed(page)
+                        if data:
+                            tables_by_text["Tabular Detail - Non Guaranteed"].extend(data)
                     
                     # --- CHATGPT ---
                     if "policy charges and other expenses" in text.lower():
