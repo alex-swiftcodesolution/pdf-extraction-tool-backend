@@ -157,6 +157,12 @@ def extract_fields(pdf_text):
 # ---------------------- PyMuPDF Extraction ----------------------
 
 def extract_tabular_detail_non_guaranteed(page):
+    import numpy as np
+    import re
+
+    def has_english_words(text):
+        return bool(re.search(r"[a-zA-Z]", str(text)))
+
     lines = []
     blocks = page.get_text("dict")["blocks"]
     for block in blocks:
@@ -167,6 +173,7 @@ def extract_tabular_detail_non_guaranteed(page):
                     lines.append((y, span["bbox"][0], span["text"].strip()))
 
     lines.sort(key=lambda x: (round(x[0], 1), x[1]))
+
     table_data, current_row, last_y = [], [], None
     for y, x, text in lines:
         if last_y is None or abs(y - last_y) < 6:
@@ -184,18 +191,112 @@ def extract_tabular_detail_non_guaranteed(page):
         if sum(c.replace(",", "").replace(".", "").isdigit() for c in row) >= 5:
             table_data.append(row)
 
-    selected_indices = [0, 1, 2, 3, 9, 10, 11]
-    table_data = [[row[i] for i in selected_indices if i < len(row)] for row in table_data]
+    print("Extracted raw rows before processing:")
+    for r in table_data:
+        print(r)
 
-    # Filter rows with no empty cells and no English words
-    table_data = [
-        row for row in table_data
-        if all(cell not in ("", None, np.nan) for cell in row) and
-        all(not has_english_words(cell) for cell in row)
-    ]
+    # Step 1: Adjust rows to align missing values after "Lapse" or assumed Lapse columns
+    expected_len = max(len(row) for row in table_data) if table_data else 12
+    expected_len = max(expected_len, 12)  # Ensure at least 12 columns
+    last_lapse_indices = set()
+    non_lapse_indices = set(range(expected_len))
+    default_lapse_indices = {6, 7, 8}  # Assumed Lapse columns
+
+    # First pass: Check for explicit Lapse values
+    has_lapse = False
+    for row in table_data:
+        lapse_indices = [i for i, val in enumerate(row) if val.lower() == 'lapse']
+        if lapse_indices:
+            last_lapse_indices = set(lapse_indices)
+            non_lapse_indices = set(range(expected_len)) - last_lapse_indices
+            has_lapse = True
+            break
+
+    # If no Lapse values found, use default Lapse indices
+    if not has_lapse:
+        last_lapse_indices = default_lapse_indices
+        non_lapse_indices = set(range(expected_len)) - last_lapse_indices
+
+    # Second pass: Adjust rows
+    adjusted_data = []
+    for row in table_data:
+        if has_lapse and set([i for i, val in enumerate(row) if val.lower() == 'lapse']):
+            # Row with explicit Lapse values, keep as is
+            new_row = row + ["_"] * (expected_len - len(row))
+            adjusted_data.append(new_row)
+            continue
+
+        # Adjust row to place underscores in Lapse columns and map values to non-Lapse columns
+        new_row = ["_"] * expected_len
+        # Map values to non-Lapse indices
+        val_idx = 0
+        non_lapse_list = sorted(non_lapse_indices)
+        # Handle rows with fewer columns by mapping the last values to the last non-Lapse indices
+        if len(row) >= len(non_lapse_indices):
+            # Normal case: enough values to fill non-Lapse indices
+            for i in non_lapse_list:
+                if val_idx < len(row):
+                    new_row[i] = row[val_idx]
+                    val_idx += 1
+        else:
+            # Short row: map values to early non-Lapse indices, then place last values in final non-Lapse indices
+            values_to_place = len(row)
+            if values_to_place > 6:  # More than the first 6 non-Lapse indices (0,1,2,3,4,5)
+                # Place the last 3 values in indices  nihilism
+                for i in non_lapse_list[:6]:
+                    if val_idx < values_to_place - 3:
+                        new_row[i] = row[val_idx]
+                        val_idx += 1
+                # Place the last 3 values in the last 3 non-Lapse indices (9,10,11)
+                for i in non_lapse_list[-3:]:
+                    if val_idx < values_to_place:
+                        new_row[i] = row[val_idx]
+                        val_idx += 1
+            else:
+                # Very short row: fill early non-Lapse indices
+                for i in non_lapse_list[:values_to_place]:
+                    new_row[i] = row[val_idx]
+                    val_idx += 1
+        adjusted_data.append(new_row)
+
+    table_data = adjusted_data
+
+    print("\nRows after adjusting for Lapse alignment:")
+    for r in table_data:
+        print(r)
+
+    # Step 2: Select specific columns
+    selected_indices = [0, 1, 2, 3, 9, 10, 11]
+    table_data = [[row[i] if i < len(row) else "_" for i in selected_indices] for row in table_data]
+
+    print("\nRows after selecting specific columns:")
+    for r in table_data:
+        print(r)
+
+    # Step 3: Filtering
+    def is_invalid(row):
+        count = 0
+        for cell in row:
+            if cell in ("", None, np.nan):
+                count += 1
+            elif has_english_words(cell) and cell != "_":
+                count += 1
+        return count >= 5
+
+    table_data = [row for row in table_data if not is_invalid(row)]
+
+    print("\nRows after filtering (based on empty/English word rule):")
+    for r in table_data:
+        print(r)
 
     keyword = "Tabular Detail - Non Guaranteed"
-    return [tuple(row + [keyword, page.number + 1]) for row in table_data]
+    result = [tuple(row + [keyword, page.number + 1]) for row in table_data]
+
+    print("\nFinal extracted tuples:")
+    for r in result:
+        print(r)
+
+    return result
 
 def extract_annual_cost_summary(page):
     lines = []
