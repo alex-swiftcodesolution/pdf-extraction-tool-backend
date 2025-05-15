@@ -31,8 +31,8 @@ PYMUPDF_KEYWORDS = [
     "Tabular Detail - Non Guaranteed",
     "Annual Cost Summary",
     # LSW
+    "Current Illustrated Rate*",
     "Policy Charges and Other Expenses",
-    "Current Illustrated Rate*" 
 ]
 
 PDFPLUMBER_KEYWORDS = [
@@ -243,6 +243,56 @@ def extract_annual_cost_summary(page):
     keyword = "Annual Cost Summary"
     return [(val, keyword, page.number + 1) for val in summed_values]
 
+def extract_current_illustrated_rate_table(page):
+    def is_numeric_or_currency(text):
+        return bool(re.match(r'^-?\$?\d{1,3}(,\d{3})*(\.\d+)?$|^-?\d+(\.\d+)?$|^-?\d*\.\d+%?$', text))    
+    
+    lines = []
+    blocks = page.get_text("dict")["blocks"]
+    
+    for block in blocks:
+        for line in block.get("lines", []):
+            for span in line["spans"]:
+                y = span["bbox"][1]
+                if 190 < y < 800:
+                    lines.append((y, span["bbox"][0], span["text"].strip()))
+
+    lines.sort(key=lambda x: (round(x[0], 1), x[1]))
+    
+    table_data, current_row, last_y = [], [], None
+    for y, x, text in lines:
+        if last_y is None or abs(y - last_y) < 6:
+            current_row.append((x, text))
+        else:
+            current_row.sort()
+            row = [t for _, t in current_row]
+            valid_values = [t for t in row if is_numeric_or_currency(t)]
+            if len(row) >= 3:
+                table_data.append(row)
+            current_row = [(x, text)]
+        last_y = y
+    
+    if current_row:
+        current_row.sort()
+        row = [t for _, t in current_row if is_numeric_or_currency(t)]
+        if len(row) >= 5:
+            table_data.append(row)
+    
+    if not table_data:
+        return []
+    
+    selected_indices = [0,1,2,3,7,8,9]
+    
+    keyword = "Current Illustrated Rate*"
+
+    results = []
+    for row in table_data:
+        selected = [row[i] if i < len(row) else "" for i in selected_indices]
+        if all(cell.strip() for cell in selected):  # skip if the selected cell is empty
+            results.append(tuple(selected + [keyword, page.number + 1]))
+
+    return results
+
 # --- CHATGPT ---
 def extract_policy_charges_table(page, POLICY_CHARGES_HEADERS):
     import re
@@ -299,7 +349,7 @@ def extract_policy_charges_table(page, POLICY_CHARGES_HEADERS):
         logger.info(f"Row {i + 1}: {row}")
 
     # Select only the desired columns: 1, 2, 3, 4, 8, 9, 10
-    selected_columns = [row[:4] + row[7:10] for row in reversed_data]
+    selected_columns = [[row[9]] for row in reversed_data]
 
     # 🪵 Log the selected columns table
     logger.info("Selected Columns from Reversed Policy Charges Table:")
@@ -309,55 +359,7 @@ def extract_policy_charges_table(page, POLICY_CHARGES_HEADERS):
     return selected_columns
 # --- CHATGPT ---
 
-def extract_current_illustrated_rate_table(page):
-    def is_numeric_or_currency(text):
-        return bool(re.match(r'^-?\$?\d{1,3}(,\d{3})*(\.\d+)?$|^-?\d+(\.\d+)?$|^-?\d*\.\d+%?$', text))    
-    
-    lines = []
-    blocks = page.get_text("dict")["blocks"]
-    
-    for block in blocks:
-        for line in block.get("lines", []):
-            for span in line["spans"]:
-                y = span["bbox"][1]
-                if 190 < y < 800:
-                    lines.append((y, span["bbox"][0], span["text"].strip()))
 
-    lines.sort(key=lambda x: (round(x[0], 1), x[1]))
-    
-    table_data, current_row, last_y = [], [], None
-    for y, x, text in lines:
-        if last_y is None or abs(y - last_y) < 6:
-            current_row.append((x, text))
-        else:
-            current_row.sort()
-            row = [t for _, t in current_row]
-            valid_values = [t for t in row if is_numeric_or_currency(t)]
-            if len(row) >= 3:
-                table_data.append(row)
-            current_row = [(x, text)]
-        last_y = y
-    
-    if current_row:
-        current_row.sort()
-        row = [t for _, t in current_row if is_numeric_or_currency(t)]
-        if len(row) >= 5:
-            table_data.append(row)
-    
-    if not table_data:
-        return []
-    
-    selected_indices = [0,1,2,3,7,8,9]
-    
-    keyword = "Current Illustrated Rate*"
-
-    results = []
-    for row in table_data:
-        selected = [row[i] if i < len(row) else "" for i in selected_indices]
-        if all(cell.strip() for cell in selected):  # skip if the selected cell is empty
-            results.append(tuple(selected + [keyword, page.number + 1]))
-
-    return results
 
 # ------------------- pdfplumber Flexible Logic ------------------
 
@@ -648,7 +650,7 @@ async def upload_pdf(file: UploadFile = File(...)):
                             # Validate and add metadata columns
                             data_with_metadata = [
                                 row + ["Policy Charges and Other Expenses", page_num + 1]
-                                for row in data if len(row) == 7
+                                for row in data if len(row) == 1
                             ]
                             if not data_with_metadata:
                                 logger.warning("No valid rows with 7 columns for Policy Charges and Other Expenses")
