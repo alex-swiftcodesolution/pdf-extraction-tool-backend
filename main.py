@@ -347,7 +347,7 @@ def extract_current_illustrated_rate_table(page):
     if not table_data:
         return []
     
-    selected_indices = [9]
+    selected_indices = [0,1,2,3,7,8,9]
     
     keyword = "Current Illustrated Rate*"
 
