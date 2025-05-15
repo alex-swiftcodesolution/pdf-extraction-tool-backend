@@ -348,10 +348,16 @@ def extract_current_illustrated_rate_table(page):
         return []
     
     selected_indices = [9]
-    table_data = [[row[i] for i in selected_indices if i < len(row)] for row in table_data]
     
     keyword = "Current Illustrated Rate*"
-    return [tuple(row + ["", page.number + 1]) for row in table_data]
+
+    results = []
+    for row in table_data:
+        selected = [row[i] if i < len(row) else "" for i in selected_indices]
+        if all(cell.strip() for cell in selected):  # skip if the selected cell is empty
+            results.append(tuple(selected + [keyword, page.number + 1]))
+
+    return results
 
 # ------------------- pdfplumber Flexible Logic ------------------
 
