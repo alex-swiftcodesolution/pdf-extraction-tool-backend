@@ -447,6 +447,7 @@ def extract_tables_with_flexible_headers(pdf):
 
                         # Modified: Filter out zero or None sums (indicating empty/invalid cells)
                         summed_values = [val for val in summed_values if val not in (0.0, None, np.nan)]
+                        summed_values = [abs(val) for val in summed_values]
                         tables_by_text[keyword].extend([
                             (val, keyword, page.page_number)
                             for val in summed_values
