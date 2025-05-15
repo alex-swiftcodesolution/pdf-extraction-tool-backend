@@ -359,8 +359,6 @@ def extract_policy_charges_table(page, POLICY_CHARGES_HEADERS):
     return selected_columns
 # --- CHATGPT ---
 
-
-
 # ------------------- pdfplumber Flexible Logic ------------------
 
 def extract_tables_with_flexible_headers(pdf):
@@ -393,12 +391,7 @@ def extract_tables_with_flexible_headers(pdf):
                             logger.warning(f"Table on page {page.page_number} has {len(cleaned)} rows, cannot skip 5 rows")
                             data_rows = cleaned
                         else:
-                            remaining_rows = cleaned[5:]
-                            data_rows = []
-                            i = 0
-                            while i < len(remaining_rows):
-                                data_rows.extend(remaining_rows[i:i+5])
-                                i += 6
+                            data_rows = cleaned[5:]
                             if not data_rows:
                                 logger.info(f"No data rows remain after skipping top 5 rows on page {page.page_number}")
                                 continue
@@ -411,8 +404,7 @@ def extract_tables_with_flexible_headers(pdf):
                         # Modified: Filter rows with no empty cells and no English words
                         data_rows = [
                             row for row in data_rows
-                            if all(cell not in ("", None, np.nan) for cell in row) and
-                            all(not has_english_words(cell) for cell in row)
+                            if all(cell not in ("", None, np.nan) for cell in row)
                         ]
                         
                         tables_by_text[keyword].extend([
@@ -572,22 +564,22 @@ def extract_tables_with_flexible_headers(pdf):
             elif num_data_columns == 1:
                 # Use universal header for 1-column tables
                 headers = UNIVERSAL_HEADER_FOR_ONE_COL_TABLES
-            else:
-                # Fallback to existing headers for other cases
-                if keyword.lower() == "your policy's current charges summary":
-                    headers = ["Total Charges Sum"]
-                elif keyword.lower() == "policy charges ledger":
-                    headers = [filtered_headers[0] if filtered_headers else "Column_10"]
-                else:
-                    selected_indices = {
-                        "your policy's illustrated values": [0, 1, 2, 3, 9, 10, 11],
-                        "basic ledger, non-guaranteed scenario": [0, 1, 2, 3, 7, 8, 9]
-                    }.get(keyword.lower(), [0, 1, 2, 3])
-                    header_map = {
-                        "your policy's illustrated values": ILLUSTRATED_VALUES_HEADERS,
-                        "basic ledger, non-guaranteed scenario": headers if keyword.lower() == "basic ledger, non-guaranteed scenario" else ["Year", "Age", "Premium Outlay", "Net Outlay"]
-                    }.get(keyword.lower(), ["Year", "Age", "Premium Outlay", "Net Outlay"])
-                    headers = [header_map[i] for i in selected_indices if i < len(header_map)]
+            # else:
+            #     # Fallback to existing headers for other cases
+            #     if keyword.lower() == "your policy's current charges summary":
+            #         headers = ["Total Charges Sum"]
+            #     elif keyword.lower() == "policy charges ledger":
+            #         headers = [filtered_headers[0] if filtered_headers else "Column_10"]
+            #     else:
+            #         selected_indices = {
+            #             "your policy's illustrated values": [0, 1, 2, 3, 9, 10, 11],
+            #             "basic ledger, non-guaranteed scenario": [0, 1, 2, 3, 7, 8, 9]
+            #         }.get(keyword.lower(), [0, 1, 2, 3])
+            #         header_map = {
+            #             "your policy's illustrated values": ILLUSTRATED_VALUES_HEADERS,
+            #             "basic ledger, non-guaranteed scenario": headers if keyword.lower() == "basic ledger, non-guaranteed scenario" else ["Year", "Age", "Premium Outlay", "Net Outlay"]
+            #         }.get(keyword.lower(), ["Year", "Age", "Premium Outlay", "Net Outlay"])
+            #         headers = [header_map[i] for i in selected_indices if i < len(header_map)]
 
             # Create DataFrame with appropriate headers plus metadata columns
             df = pd.DataFrame(
@@ -695,16 +687,16 @@ async def upload_pdf(file: UploadFile = File(...)):
                 elif num_data_columns == 1:
                     # Use universal header for 1-column tables
                     headers = UNIVERSAL_HEADER_FOR_ONE_COL_TABLES
-                else:
-                    # Fallback to existing headers for other cases
-                    if keyword == "Tabular Detail - Non Guaranteed":
-                        headers = ["Total Financial Metrics Sum"]
-                    elif keyword == "Annual Cost Summary":
-                        headers = [COST_SUMMARY_HEADERS[i] for i in [0, 1, 2, 3, 9, 10, 11]]
-                    elif keyword == "Policy Charges and Other Expenses":
-                        headers = [POLICY_CHARGES_HEADERS[i] for i in [0, 1, 2, 3, 7, 8, 9]]
-                    elif keyword == "Current Illustrated Rate*":
-                        headers = [CURRENT_ILLUSTRATED_RATE_HEADERS[9]]
+                # else:
+                #     # Fallback to existing headers for other cases
+                #     if keyword == "Tabular Detail - Non Guaranteed":
+                #         headers = ["Total Financial Metrics Sum"]
+                #     elif keyword == "Annual Cost Summary":
+                #         headers = [COST_SUMMARY_HEADERS[i] for i in [0, 1, 2, 3, 9, 10, 11]]
+                #     elif keyword == "Policy Charges and Other Expenses":
+                #         headers = [POLICY_CHARGES_HEADERS[i] for i in [0, 1, 2, 3, 7, 8, 9]]
+                #     elif keyword == "Current Illustrated Rate*":
+                #         headers = [CURRENT_ILLUSTRATED_RATE_HEADERS[9]]
 
                 # Create DataFrame with appropriate headers plus metadata columns
                 df = pd.DataFrame(
