@@ -408,77 +408,199 @@ def extract_current_illustrated_rate_table(page):
     return results
 
 # --- CHATGPT ---
+# def extract_policy_charges_table(page, POLICY_CHARGES_HEADERS):
+#     import re
+#     import logging
+
+#     logger = logging.getLogger(__name__)
+
+#     def is_numeric_or_currency(text):
+#         return bool(re.match(r'^-?\$?\d{1,3}(,\d{3})*(\.\d+)?$|^-?\d+(\.\d+)?$', text))
+
+#     lines = []
+#     blocks = page.get_text("dict")["blocks"]
+
+#     for block in blocks:
+#         for line in block.get("lines", []):
+#             for span in line["spans"]:
+#                 y = span["bbox"][1]
+#                 if 20 < y < 1000:
+#                     lines.append((y, span["bbox"][0], span["text"].strip()))
+
+#     lines.sort(key=lambda x: (round(x[0], 1), x[1]))
+
+#     table_data, current_row, last_y = [], [], None
+#     for y, x, text in lines:
+#         if last_y is None or abs(y - last_y) < 5:
+#             current_row.append((x, text))
+#         else:
+#             current_row.sort()
+#             row_values = [t for _, t in current_row if is_numeric_or_currency(t)]
+#             all_values = [t for _, t in current_row]
+#             if len(row_values) >= 3 and all(t != '' for t in all_values):
+#                 table_data.append(row_values)
+#             current_row = [(x, text)]
+#         last_y = y
+
+#     if current_row:
+#         current_row.sort()
+#         row_values = [t for _, t in current_row if is_numeric_or_currency(t)]
+#         all_values = [t for _, t in current_row]
+#         if len(row_values) >= 3 and all(t != '' for t in all_values):
+#             table_data.append(row_values)
+
+#     if not table_data:
+#         logger.info("No valid table data extracted for Policy Charges and Other Expenses")
+#         return []
+
+#     # 🔁 Transpose: rows -> columns
+#     transposed_data = list(map(list, zip(*table_data)))
+
+#     # 🔄 Reverse each row of the transposed table to make the last column the first
+#     reversed_data = [row[::-1] for row in transposed_data]
+
+#     logger.info("Reversed Policy Charges Table:")
+#     for i, row in enumerate(reversed_data):
+#         logger.info(f"Row {i + 1}: {row}")
+
+#     # ✅ Skip rows with any empty cell
+#     # cleaned_rows = [row for row in reversed_data if all(cell.strip() != '' for cell in row)]
+    
+#     cleaned_rows = [row for row in reversed_data if len([cell for cell in row if cell.strip() or cell == "0"]) != 3]
+
+#     logger.info("Cleaned Rows (no empty cells):")
+#     for i, row in enumerate(cleaned_rows):
+#         logger.info(f"Row {i + 1}: {row}")
+
+#     # ✅ Select column 9 (index 9) from cleaned rows
+#     selected_columns = [[row[9]] for row in cleaned_rows if len(row) > 9]
+
+#     logger.info("Selected Column 9 from Cleaned Reversed Table:")
+#     for i, row in enumerate(selected_columns):
+#         logger.info(f"Row {i + 1}: {row}")
+
+#     return selected_columns
+# --- CHATGPT ---
+
 def extract_policy_charges_table(page, POLICY_CHARGES_HEADERS):
-    import re
-    import logging
+    """
+    Extracts the 9th column from a table on a PDF page containing the keyword
+    "Policy Charges and Other Expenses" after transposing and reversing the table.
+    Skips rows where the 9th column is empty.
+    
+    Args:
+        page: PyMuPDF page object to process
+        POLICY_CHARGES_HEADERS: List of header names for the output table
+    Returns:
+        List of single-column rows (column 9) with non-empty cells, or empty list if no data
+    """
+    logger.info(f"Processing page {page.number + 1}")
 
-    logger = logging.getLogger(__name__)
+    # Step 1: Check if the keyword "Policy Charges and Other Expenses" is on the page
+    keyword = "Policy Charges and Other Expenses"
+    page_text = page.get_text().lower()
+    if keyword.lower() not in page_text:
+        logger.warning(f"Keyword '{keyword}' not found on page {page.number + 1}")
+        return []  # Skip page if keyword is missing
+    logger.info(f"Keyword '{keyword}' found on page {page.number + 1}")
 
+    # Step 2: Define helper function to identify numeric or currency values
     def is_numeric_or_currency(text):
+        """
+        Checks if text is a numeric or currency value (e.g., 123, $1,234.56, -45.67).
+        Args:
+            text: String to check
+        Returns:
+            Boolean indicating if the text matches the pattern
+        """
         return bool(re.match(r'^-?\$?\d{1,3}(,\d{3})*(\.\d+)?$|^-?\d+(\.\d+)?$', text))
 
+    # Step 3: Extract text spans within y-coordinate range (20 to 1000)
     lines = []
-    blocks = page.get_text("dict")["blocks"]
+    blocks = page.get_text("dict")["blocks"]  # Get structured text blocks
+    logger.debug(f"Found {len(blocks)} blocks on page {page.number + 1}")
 
     for block in blocks:
         for line in block.get("lines", []):
             for span in line["spans"]:
-                y = span["bbox"][1]
-                if 20 < y < 1000:
+                y = span["bbox"][1]  # Get y-coordinate of the text span
+                if 20 < y < 1000:  # Filter spans within vertical range
+                    # Store (y-coordinate, x-coordinate, text) for sorting
                     lines.append((y, span["bbox"][0], span["text"].strip()))
 
-    lines.sort(key=lambda x: (round(x[0], 1), x[1]))
+    if not lines:
+        logger.warning(f"No text lines found in y-range 20-1000 on page {page.number + 1}")
+        return []  # Return empty if no text found
+    logger.info(f"Collected {len(lines)} text lines on page {page.number + 1}")
 
+    # Step 4: Sort lines by y-coordinate (rounded to 1 decimal) then x-coordinate
+    # This groups text into rows and orders columns left-to-right
+    lines.sort(key=lambda x: (round(x[0], 1), x[1]))
+    logger.debug(f"Sorted {len(lines)} lines by y and x coordinates")
+
+    # Step 5: Group lines into rows based on y-coordinate proximity
     table_data, current_row, last_y = [], [], None
     for y, x, text in lines:
-        if last_y is None or abs(y - last_y) < 5:
+        # If no previous y or y is within 18 units, add to current row
+        if last_y is None or abs(y - last_y) < 18:
             current_row.append((x, text))
         else:
+            # Sort current row by x-coordinate to ensure left-to-right order
             current_row.sort()
-            row_values = [t for _, t in current_row if is_numeric_or_currency(t)]
+            # Extract all values, preserving empty or non-numeric cells
             all_values = [t for _, t in current_row]
-            if len(row_values) >= 3 and all(t != '' for t in all_values):
+            # Include row if it has at least 3 numeric values
+            row_values = [t if is_numeric_or_currency(t) else "" for t in all_values]
+            if sum(1 for t in row_values if t) >= 3:  # At least 3 non-empty numeric values
                 table_data.append(row_values)
-            current_row = [(x, text)]
+            current_row = [(x, text)]  # Start new row
         last_y = y
 
+    # Process the last row
     if current_row:
         current_row.sort()
-        row_values = [t for _, t in current_row if is_numeric_or_currency(t)]
         all_values = [t for _, t in current_row]
-        if len(row_values) >= 3 and all(t != '' for t in all_values):
+        row_values = [t if is_numeric_or_currency(t) else "" for t in all_values]
+        if sum(1 for t in row_values if t) >= 3:
             table_data.append(row_values)
 
     if not table_data:
-        logger.info("No valid table data extracted for Policy Charges and Other Expenses")
-        return []
+        logger.info(f"No valid table data extracted for Policy Charges and Other Expenses on page {page.number + 1}")
+        return []  # Return empty if no valid rows
+    logger.info(f"Extracted {len(table_data)} rows of table data")
 
-    # 🔁 Transpose: rows -> columns
+    # Step 6: Pad rows to ensure consistent length for transposition
+    # Add empty strings to shorter rows to match the longest row
+    max_len = max(len(row) for row in table_data)
+    table_data = [row + [""] * (max_len - len(row)) for row in table_data]
+    logger.info(f"Padded table to {max_len} columns for consistent transposition")
+
+    # Step 7: Transpose the table (rows become columns, columns become rows)
     transposed_data = list(map(list, zip(*table_data)))
+    logger.info(f"Transposed table: {len(transposed_data)} columns, {len(table_data)} rows")
 
-    # 🔄 Reverse each row of the transposed table to make the last column the first
+    # Step 8: Reverse each row to make the last column the first
     reversed_data = [row[::-1] for row in transposed_data]
-
     logger.info("Reversed Policy Charges Table:")
     for i, row in enumerate(reversed_data):
         logger.info(f"Row {i + 1}: {row}")
 
-    # ✅ Skip rows with any empty cell
-    cleaned_rows = [row for row in reversed_data if all(cell.strip() != '' for cell in row)]
-
-    logger.info("Cleaned Rows (no empty cells):")
+    # Step 9: Clean rows by excluding those with exactly 10 non-empty cells
+    # Keep empty cells as they are
+    cleaned_rows = [row for row in reversed_data if len([cell for cell in row if cell.strip() or cell == "0"]) != 10]
+    logger.info("Cleaned Rows (excluding rows with exactly 10 non-empty cells, keeping empty cells):")
     for i, row in enumerate(cleaned_rows):
         logger.info(f"Row {i + 1}: {row}")
 
-    # ✅ Select column 9 (index 9) from cleaned rows
-    selected_columns = [[row[9]] for row in cleaned_rows if len(row) > 9]
-
-    logger.info("Selected Column 9 from Cleaned Reversed Table:")
+    # Step 10: Select the 9th column (index 8) from rows with sufficient length, skipping empty cells
+    selected_columns = [[row[8]] for row in cleaned_rows if len(row) > 8 and (row[8].strip() or row[8] == "0")]
+    logger.info("Selected Column 9 from Cleaned Reversed Table (skipping empty cells):")
     for i, row in enumerate(selected_columns):
         logger.info(f"Row {i + 1}: {row}")
 
+    # Step 11: Return the single-column table
+    logger.info(f"Returning single-column table (column 9) with {len(selected_columns)} rows for page {page.number + 1}, excluding empty cells")
     return selected_columns
-# --- CHATGPT ---
 
 # ------------------- pdfplumber Flexible Logic ------------------
 
@@ -748,6 +870,8 @@ async def upload_pdf(file: UploadFile = File(...)):
         if any(k in found_keywords for k in PYMUPDF_KEYWORDS):
             pdf_file.seek(0)
             with fitz.open(stream=pdf_file, filetype="pdf") as doc:
+                policy_charges_rows = []
+                
                 for page_num, page in enumerate(doc):
                     text = page.get_text("text").lower()
                     
@@ -764,17 +888,8 @@ async def upload_pdf(file: UploadFile = File(...)):
                     # --- CHATGPT ---
                     if "policy charges and other expenses" in text.lower():
                         data = extract_policy_charges_table(page, POLICY_CHARGES_HEADERS)
-                        if data:
-                            # Validate and add metadata columns
-                            data_with_metadata = [
-                                row + ["Policy Charges and Other Expenses", page_num + 1]
-                                for row in data if len(row) == 1
-                            ]
-                            if not data_with_metadata:
-                                logger.warning("No valid rows with 1 column for Policy Charges and Other Expenses")
-                            else:
-                                logger.info(f"Appending {len(data_with_metadata)} rows with 9 columns for Policy Charges and Other Expenses")
-                                tables_by_text["Policy Charges and Other Expenses"].extend(data_with_metadata)
+                        if data: 
+                            policy_charges_rows.extend(data)
                     # --- CHATGPT ---
 
                     if "current illustrated rate*" in text.lower():
@@ -782,6 +897,25 @@ async def upload_pdf(file: UploadFile = File(...)):
                         if data:
                             tables_by_text["Current Illustrated Rate*"].extend(data)
 
+                # Process Policy Charges and Other Expenses rows
+                if policy_charges_rows:
+                    # Skip every 6th row
+                    filtered_policy_charges_rows = [row for i, row in enumerate(policy_charges_rows, 1) if i % 6 != 0]
+                    logger.info(f"Filtered Policy Charges and Other Expenses: {len(filtered_policy_charges_rows)} rows after skipping every 6th row")
+                    
+                    # Add metadata to filtered rows (assuming page number from first page with data)
+                    # Note: If you need specific page numbers, you may need to track pages during collection
+                    data_with_metadata = [
+                        row + ["Policy Charges and Other Expenses", min(page_num + 1 for page_num, page in enumerate(doc) if "policy charges and other expenses" in page.get_text("text").lower())]
+                        for row in filtered_policy_charges_rows if len(row) == 1
+                    ]
+                    
+                    if not data_with_metadata:
+                        logger.warning("No valid rows with 1 column for Policy Charges and Other Expenses after filtering")
+                    else:
+                        logger.info(f"Appending {len(data_with_metadata)} rows for Policy Charges and Other Expenses")
+                        tables_by_text["Policy Charges and Other Expenses"].extend(data_with_metadata)
+                    
         for keyword in PYMUPDF_KEYWORDS:
             if tables_by_text[keyword]:
                 # Modified: Filter rows with no empty cells and no English words
