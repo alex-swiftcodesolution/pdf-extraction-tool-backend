@@ -46,24 +46,11 @@ PDFPLUMBER_KEYWORDS = [
 
 # UNIVERSAL HEADER FOR ALL TABLES
 UNIVERSAL_HEADER_FOR_SEVEN_COL_TABLES = [
-    "Policy Year","Age","Premium Outlay","Net Outlay","Cash Value","Surrender Value","Death Benefit"
+    "Age","Policy Year","Premium Outlay","Net Outlay","Cash Value","Surrender Value","Death Benefit"
 ]
 UNIVERSAL_HEADER_FOR_ONE_COL_TABLES = [
     "Charges"
 ]
-
-HEADER_FOR_ALZ_TABLE = [
-    "Age","Policy Year","Premium Outlay","Net Outlay","Cash Value","Surrender Value","Death Benefit"
-] 
-HEADER_FOR_LSW_TABLE = [
-    "Policy Year","Age","Premium Outlay","Net Outlay","Cash Value","Surrender Value","Death Benefit"
-] 
-HEADER_FOR_MN_TABLE = [
-    "Policy Year","Age","Premium Outlay","Net Outlay","Cash Value","Surrender Value","Death Benefit"
-] 
-HEADER_FOR_NW_TABLE = [
-    "Policy Year","Age","Premium Outlay","Net Outlay","Cash Value","Surrender Value","Death Benefit"
-] 
 
 # NW
 TABULAR_HEADERS = [
@@ -435,19 +422,17 @@ def extract_policy_charges_table(page, POLICY_CHARGES_HEADERS):
             current_row.append((x, text))
         else:
             current_row.sort()
-            row_values = [t for _, t in current_row if is_numeric_or_currency(t)]
-            all_values = [t for _, t in current_row]
-            if len(row_values) >= 3 and all(t != '' for t in all_values):
-                table_data.append(row_values)
+            row = [t for _, t in current_row if is_numeric_or_currency(t)]
+            if len(row) >= 3:
+                table_data.append(row)
             current_row = [(x, text)]
         last_y = y
 
     if current_row:
         current_row.sort()
-        row_values = [t for _, t in current_row if is_numeric_or_currency(t)]
-        all_values = [t for _, t in current_row]
-        if len(row_values) >= 3 and all(t != '' for t in all_values):
-            table_data.append(row_values)
+        row = [t for _, t in current_row if is_numeric_or_currency(t)]
+        if len(row) >= 3:
+            table_data.append(row)
 
     if not table_data:
         logger.info("No valid table data extracted for Policy Charges and Other Expenses")
@@ -459,21 +444,16 @@ def extract_policy_charges_table(page, POLICY_CHARGES_HEADERS):
     # 🔄 Reverse each row of the transposed table to make the last column the first
     reversed_data = [row[::-1] for row in transposed_data]
 
+    # 🪵 Log the reversed table
     logger.info("Reversed Policy Charges Table:")
     for i, row in enumerate(reversed_data):
         logger.info(f"Row {i + 1}: {row}")
 
-    # ✅ Skip rows with any empty cell
-    cleaned_rows = [row for row in reversed_data if all(cell.strip() != '' for cell in row)]
+    # Select only the desired columns: 1, 2, 3, 4, 8, 9, 10
+    selected_columns = [[row[9]] for row in reversed_data]
 
-    logger.info("Cleaned Rows (no empty cells):")
-    for i, row in enumerate(cleaned_rows):
-        logger.info(f"Row {i + 1}: {row}")
-
-    # ✅ Select column 9 (index 9) from cleaned rows
-    selected_columns = [[row[9]] for row in cleaned_rows if len(row) > 9]
-
-    logger.info("Selected Column 9 from Cleaned Reversed Table:")
+    # 🪵 Log the selected columns table
+    logger.info("Selected Columns from Reversed Policy Charges Table:")
     for i, row in enumerate(selected_columns):
         logger.info(f"Row {i + 1}: {row}")
 
@@ -532,27 +512,24 @@ def extract_tables_with_flexible_headers(pdf):
                             tuple(row + [keyword, page.page_number])
                             for row in data_rows
                         ])
-                    
+
                     elif keyword.lower() == "your policy's current charges summary":
                         headers = POLICY_CURRENT_CHARGES_SUMMARY_HEADERS
-                        # Filter out rows with any empty cells (excluding 0)
-                        cleaned = [
-                            row for row in cleaned 
-                            if all(
-                                cell is not None and str(cell).strip() != "" 
-                                for cell in row
-                            )
-                        ]
-                        if len(cleaned) < 1:
-                            logger.warning(f"Table on page {page.page_number} has {len(cleaned)} rows, cannot skip 1 rows")
+                        cleaned = [row for row in cleaned if any(cell for cell in row)]
+                        if len(cleaned) < 3:
+                            logger.warning(f"Table on page {page.page_number} has {len(cleaned)} rows, cannot skip 3 rows")
                             data_rows = cleaned
                         else:
-                            data_rows = cleaned[1:]
+                            remaining_rows = cleaned[3:]
+                            data_rows = []
+                            i = 0
+                            while i < len(remaining_rows):
+                                data_rows.extend(remaining_rows[i:i+5])
+                                i += 6
                             if not data_rows:
-                                logger.info(f"No data rows remain after skipping top 5 rows on page {page.page_number}")
+                                logger.info(f"No data rows remain after skipping top 3 rows on page {page.page_number}")
                                 continue
-                        data_rows = [row[:len(headers)] + [""] * (len(headers) - len(row)) for row in data_rows]
-                        
+
                         sum_indices = [3, 4, 5, 6]
                         def safe_float(val):
                             try:
@@ -569,6 +546,7 @@ def extract_tables_with_flexible_headers(pdf):
                             for row in data_rows
                         ]
 
+                        # Modified: Filter out zero or None sums (indicating empty/invalid cells)
                         summed_values = [val for val in summed_values if val not in (0.0, None, np.nan)]
                         summed_values = [abs(val) for val in summed_values]
                         tables_by_text[keyword].extend([
@@ -682,9 +660,7 @@ def extract_tables_with_flexible_headers(pdf):
             num_data_columns = len(tables_by_text[keyword][0]) - 2  # Subtract 2 for metadata columns
 
             # Assign headers based on number of data columns
-            if keyword.lower() == "basic ledger, non-guaranteed scenario":
-                headers = HEADER_FOR_ALZ_TABLE
-            elif num_data_columns == 7:
+            if num_data_columns == 7:
                 # Use universal header for 7-column tables
                 headers = UNIVERSAL_HEADER_FOR_SEVEN_COL_TABLES
             elif num_data_columns == 1:
@@ -771,7 +747,7 @@ async def upload_pdf(file: UploadFile = File(...)):
                                 for row in data if len(row) == 1
                             ]
                             if not data_with_metadata:
-                                logger.warning("No valid rows with 1 column for Policy Charges and Other Expenses")
+                                logger.warning("No valid rows with 7 columns for Policy Charges and Other Expenses")
                             else:
                                 logger.info(f"Appending {len(data_with_metadata)} rows with 9 columns for Policy Charges and Other Expenses")
                                 tables_by_text["Policy Charges and Other Expenses"].extend(data_with_metadata)
