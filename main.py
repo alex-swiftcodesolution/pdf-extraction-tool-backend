@@ -134,11 +134,21 @@ def has_english_words(text):
     # Check if the remaining text is purely numeric or a decimal
     return not bool(re.match(r'^-?\d*\.?\d*$', cleaned))
 
+
+def extract_filename(filename):
+    return filename
+
 # Added: Function to extract fields (illustration_date, insured_name, etc.)
-def extract_fields(pdf_text):
+def extract_fields(pdf_text, filename):
     """
-    Extracts specified fields from PDF text using regex patterns.
-    Returns a dictionary with field values or None if not found.
+    Extracts specified fields from PDF text, with assumed_ror conditioned on filename keywords.
+    For ALZ files, extracts assumed_ror from the line below the first occurrence of
+    'current scenario indexed interest rate'.
+    Args:
+        pdf_text: The text extracted from the PDF.
+        filename: The name of the uploaded PDF file.
+    Returns:
+        A dictionary with field values or None if not found.
     """
     fields = {
         "illustration_date": None,
@@ -148,15 +158,93 @@ def extract_fields(pdf_text):
         "minimum_initial_pmt": None
     }
     
+    pages = pdf_text.split("page ")[1:]
+    page_1_text = pages[0].lower() if pages else text.lower()
+    
     # Normalize text for case-insensitive matching
     text = pdf_text.lower()
+    filename = filename.lower()
     
-    # Patterns for each field
+
+    # Define default pattern for assumed_ror
+    default_ror_pattern = r"assumed\s*ror[:\s]*([\d.]+%)"
+
+    # Define keyword-based patterns for assumed_ror
+    ror_patterns = {
+        "nationwide": r"assumed\s*[:\s]*([\d.]+%)",  # NW-specific pattern
+        "lsw": r"illustrated\s*rate[:\s]*([\d.]+%)",  # LSW-specific pattern
+        "mn": r"crediting\s*rate[:\s]*([\d.]+%)"  # MN-specific pattern
+    }
+
+    mn_ror_pattern = r"using\s*([\d.]+)%\s*illustrated\s*crediting\s*rate\s*and\s*current\s*charges"
+    
+    nw_ror_pattern = r"(?:indexed\s*interest|assumed|illustrated\s*rate)\s*[\n\r\s]*([\d.]+%)"
+        
+    # Handle assumed_ror for ALZ files
+    if "alz" in filename:
+        lines = pdf_text.splitlines()
+        target_text = "Indexed interest rates"
+        found = False
+        for i, line in enumerate(lines):
+            if target_text.lower() in line.lower():
+                found = True
+                if i + 1 < len(lines):
+                    next_line = lines[i + 1].strip()
+                    match = re.search(r"(\d+\.?\d*%)", next_line)
+                    if match:
+                        fields["assumed_ror"] = match.group(1)
+                        break
+                    
+    elif "mnl" in filename:
+        ror_match = re.search(mn_ror_pattern, text, re.IGNORECASE | re.DOTALL)
+        if ror_match:
+            fields["assumed_ror"] = f"{ror_match.group(1)}%"
+        else:
+            # Fallback to the existing MN pattern if the primary pattern fails
+            ror_match = re.search(ror_patterns["mn"], text, re.IGNORECASE)
+            if ror_match:
+                fields["assumed_ror"] = ror_match.group(1).strip()
+                
+    elif "nationwide" in filename:
+    # Search for percentage near 'indexed interest', 'assumed', or 'illustrated rate'
+        ror_match = re.search(nw_ror_pattern, text, re.IGNORECASE | re.DOTALL)
+        if ror_match:
+            fields["assumed_ror"] = ror_match.group(1).strip()
+            # Debug: Log the match
+            print(f"Nationwide assumed_ror matched: {ror_match.group(1)}")
+        else:
+            # Fallback to broader pattern
+            ror_match = re.search(r"assumed\s*[:\s]*([\d.]+%)", text, re.IGNORECASE)
+            if ror_match:
+                fields["assumed_ror"] = ror_match.group(1).strip()
+                print(f"Nationwide fallback assumed_ror: {ror_match.group(1)}")
+            else:
+                print("Nationwide assumed_ror not found")
+            
+    else:
+        # Select pattern for non-ALZ files
+        selected_ror_pattern = default_ror_pattern
+        for keyword, pattern in ror_patterns.items():
+            if keyword in filename:
+                selected_ror_pattern = pattern
+                break
+        ror_pattern = selected_ror_pattern
+        match = re.search(ror_pattern, text, re.IGNORECASE)
+        if match:
+            fields["assumed_ror"] = match.group(1).strip()
+
+    # Define patterns for other fields
     patterns = {
-        "illustration_date": r"illustration\s*date[:\s]*(\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|\w+\s+\d{1,2},\s+\d{4})",
+        "illustration_date": (
+            r"(?:\billustration\s*date\b|prepared\s*on\b|issued\s*on\b|date\b)[:\s]*"
+            r"(\d{1,2}[/-]\d{1,2}[/-]\d{2,4}"  # MM/DD/YYYY or MM-DD-YYYY (e.g., 3/21/2025)
+            r"|\w+\s+\d{1,2},\s+\d{4}"         # Month DD, YYYY (e.g., March 21, 2025)
+            r"|\d{1,2}\s+\w+\s+\d{4}"          # DD Month YYYY (e.g., 21 March 2025)
+            r"|\d{4}-\d{2}-\d{2}"              # YYYY-MM-DD (e.g., 2025-03-21)
+            r"|\d{1,2}/\d{1,2}/\d{2})"         # MM/DD/YY (e.g., 03/21/25)
+        ),
         "insured_name": r"insured\s*(?:name)?[:\s]*([a-z\s]+?)(?=\n|$|[a-z\s]*:)",
         "initial_death_benefit": r"initial\s*death\s*benefit[:\s]*[\$]?([\d,]+\.?\d*)",
-        "assumed_ror": r"assumed\s*ror[:\s]*([\d.]+%)",
         "minimum_initial_pmt": r"minimum\s*initial\s*pmt[:\s]*[\$]?([\d,]+\.?\d*)"
     }
     
@@ -762,7 +850,7 @@ async def upload_pdf(file: UploadFile = File(...)):
                 all_text += page.get_text("text") + "\n"  # Added newline for better pattern matching
         
         # Modified: Extract fields (optional, may return None for missing fields)
-        extracted_fields = extract_fields(all_text)
+        extracted_fields = extract_fields(all_text, file.filename)
 
         # Modified: Check for keywords in lowercase text
         found_keywords = [k for k in PYMUPDF_KEYWORDS + PDFPLUMBER_KEYWORDS if k.lower() in all_text.lower()]
