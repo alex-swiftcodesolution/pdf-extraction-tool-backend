@@ -46,23 +46,23 @@ PDFPLUMBER_KEYWORDS = [
 
 # UNIVERSAL HEADER FOR ALL TABLES
 UNIVERSAL_HEADER_FOR_SEVEN_COL_TABLES = [
-    "Policy Year","Age","Premium Outlay","Net Outlay","Cash Value","Surrender Value","Death Benefit"
+    "Policy Year","Age","Premium Outlay","Net Income","Cash Value","Surrender Value","Death Benefit"
 ]
 UNIVERSAL_HEADER_FOR_ONE_COL_TABLES = [
     "Charges"
 ]
 
 HEADER_FOR_ALZ_TABLE = [
-    "Age","Policy Year","Premium Outlay","Net Outlay","Cash Value","Surrender Value","Death Benefit"
+    "Age","Policy Year","Premium Outlay","Net Income","Cash Value","Surrender Value","Death Benefit"
 ] 
 HEADER_FOR_LSW_TABLE = [
-    "Policy Year","Age","Premium Outlay","Net Outlay","Cash Value","Surrender Value","Death Benefit"
+    "Policy Year","Age","Premium Outlay","Net Income","Cash Value","Surrender Value","Death Benefit"
 ] 
 HEADER_FOR_MN_TABLE = [
-    "Policy Year","Age","Premium Outlay","Net Outlay","Cash Value","Surrender Value","Death Benefit"
+    "Policy Year","Age","Premium Outlay","Net Income","Cash Value","Surrender Value","Death Benefit"
 ] 
 HEADER_FOR_NW_TABLE = [
-    "Policy Year","Age","Premium Outlay","Net Outlay","Cash Value","Surrender Value","Death Benefit"
+    "Policy Year","Age","Premium Outlay","Net Income","Cash Value","Surrender Value","Death Benefit"
 ] 
 
 # NW
@@ -81,7 +81,7 @@ COST_SUMMARY_HEADERS = [
 
 # MN
 ILLUSTRATED_VALUES_HEADERS = [
-    "Year","Age","Premium Outlay","Net Outlay",
+    "Year","Age","Premium Outlay","Net Income",
     "[Guaranteed Values][2.00% crediting rate and maximum charges]Surrender Value",
     "[Guaranteed Values][2.00% crediting rate and maximum charges]Death Benefit",
     "[Non-Guaranteed Values][4.25% alternative crediting rate and current charges]Cash Value",
@@ -243,7 +243,12 @@ def extract_fields(pdf_text, filename):
             r"|\d{4}-\d{2}-\d{2}"              # YYYY-MM-DD (e.g., 2025-03-21)
             r"|\d{1,2}/\d{1,2}/\d{2})"         # MM/DD/YY (e.g., 03/21/25)
         ),
-        "insured_name": r"insured\s*(?:name)?[:\s]*([a-z\s]+?)(?=\n|$|[a-z\s]*:)",
+        
+        # "insured_name": r"(?:prepared\s*for|for)\s*:\s*\n*([A-Za-z][^\n:]{2,50})",
+        # "insured_name": r"(?:prepared\s*for|for)\s*:?\s*\n*([A-Za-z][^\n:]{2,50})",
+        # "insured_name": r"(?:prepared\s*for|for)\s*:?\s*\n*([A-Za-z][^\n]{2,50})(?=\n|$)",
+        "insured_name": r"(?:prepared\s*for|for)\s*:?\s*\n*\s*([A-Za-z][^\n]{2,50})(?=\n|$)",
+                
         "initial_death_benefit": r"initial\s*death\s*benefit[:\s]*[\$]?([\d,]+\.?\d*)",
         "minimum_initial_pmt": r"minimum\s*initial\s*pmt[:\s]*[\$]?([\d,]+\.?\d*)"
     }
@@ -817,8 +822,8 @@ def extract_tables_with_flexible_headers(pdf):
             #         }.get(keyword.lower(), [0, 1, 2, 3])
             #         header_map = {
             #             "your policy's illustrated values": ILLUSTRATED_VALUES_HEADERS,
-            #             "basic ledger, non-guaranteed scenario": headers if keyword.lower() == "basic ledger, non-guaranteed scenario" else ["Year", "Age", "Premium Outlay", "Net Outlay"]
-            #         }.get(keyword.lower(), ["Year", "Age", "Premium Outlay", "Net Outlay"])
+            #             "basic ledger, non-guaranteed scenario": headers if keyword.lower() == "basic ledger, non-guaranteed scenario" else ["Year", "Age", "Premium Outlay", "Net Income"]
+            #         }.get(keyword.lower(), ["Year", "Age", "Premium Outlay", "Net Income"])
             #         headers = [header_map[i] for i in selected_indices if i < len(header_map)]
 
             # Create DataFrame with appropriate headers plus metadata columns
