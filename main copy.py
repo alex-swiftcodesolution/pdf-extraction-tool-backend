@@ -35,9 +35,6 @@ PYMUPDF_KEYWORDS = [
     "Annual Cost Summary",  # NW cost summary table
     "Current Illustrated Rate*",  # LSW illustrated rate table
     "Policy Charges and Other Expenses",  # LSW charges table
-    
-    "Summary Page: Current Policy Charges",  # sym 7 cols
-    "Details of Policy Charges"  # sym 1 sum col
 ]
 
 # Define keywords for pdfplumber-based table extraction
@@ -125,15 +122,6 @@ CURRENT_ILLUSTRATED_RATE_HEADERS = [
     "Cash surrender value", "Net death benefit"
 ]
 
-# sym
-SUMMARY_PAGE_CURRENT_POLICY_CHARGES_HEADERS = [
-    "Policy Year", "Age", "Premium Outlay", "Cost of Insurance Charge",
-    "Policy Issue Charge", "Additional Charges", "Total Charges"
-]
-
-# sym
-DETAILS_OF_POLICY_CHARGES_HEADERS = ["Total Charges"]
-
 # ------------------------- Helper Functions -------------------------
 
 def has_english_words(text: str) -> bool:
@@ -199,7 +187,7 @@ def extract_fields(pdf_text: str, filename: str) -> dict:
     mn_ror_pattern = r"using\s*([\d.]+)%\s*illustrated\s*crediting\s*rate\s*and\s*current\s*charges"
     nw_ror_pattern = r"(?:indexed\s*interest|assumed|illustrated\s*rate)\s*[\n\r\s]*([\d.]+%)"
 
-    # Handle assumed_ror for files
+    # Handle assumed_ror for ALZ files
     if "alz" in filename:
         lines = pdf_text.splitlines()
         target_text = "Indexed interest rates"
@@ -267,166 +255,6 @@ def extract_fields(pdf_text: str, filename: str) -> dict:
 # ------------------------- Table Extraction Functions -------------------------
 
 # Note: The following functions are unchanged as per request to preserve table extraction logic.
-
-def extract_summary_page_current_policy_charges(page):
-    """
-    Extracts specified columns (1,2,3,5,6,7,8) from a table on a PDF page containing
-    the keyword 'Summary Page: Current Policy Charges' using PyMuPDF. Includes rows with empty cells.
-    
-    Args:
-        page: PyMuPDF page object to process
-    
-    Returns:
-        List of tuples with selected columns, keyword, and page number
-    """
-    # Check if the keyword is present
-    keyword = "Summary Page: Current Policy Charges"
-    page_text = page.get_text().lower()
-    if keyword.lower() not in page_text:
-        return []
-
-    # Define helper function to identify numeric or currency values
-    def is_numeric_or_currency(text):
-        return bool(re.match(r'^-?\$?\d{1,3}(,\d{3})*(\.\d+)?$|^-?\d+(\.\d+)?$|^-?\d*\.\d+%?$', text))
-
-    # Extract text spans within y-coordinate range
-    lines = []
-    blocks = page.get_text("dict")["blocks"]
-    for block in blocks:
-        for line in block.get("lines", []):
-            for span in line["spans"]:
-                y = span["bbox"][1]
-                if 100 < y < 750:  # Adjust range as needed
-                    lines.append((y, span["bbox"][0], span["text"].strip()))
-
-    if not lines:
-        return []
-
-    # Sort lines by y-coordinate (rounded to 1 decimal) then x-coordinate
-    lines.sort(key=lambda x: (round(x[0], 1), x[1]))
-
-    # Group lines into rows
-    table_data, current_row, last_y = [], [], None
-    for y, x, text in lines:
-        if last_y is None or abs(y - last_y) < 6:
-            current_row.append((x, text))
-        else:
-            current_row.sort()
-            row = [t for _, t in current_row]
-            if sum(is_numeric_or_currency(t) for t in row) >= 5:  # Require at least 5 numeric columns
-                table_data.append(row)
-            current_row = [(x, text)]
-        last_y = y
-
-    if current_row:
-        current_row.sort()
-        row = [t for _, t in current_row]
-        if sum(is_numeric_or_currency(t) for t in row) >= 5:
-            table_data.append(row)
-
-    if not table_data:
-        return []
-
-    # Select specified columns (1,2,3,5,6,7,8 -> 0-based indices: 0,1,2,4,5,6,7)
-    selected_indices = [0, 1, 2, 4, 5, 6, 7]
-    table_data = [
-        [row[i] if i < len(row) else "" for i in selected_indices]
-        for row in table_data
-    ]
-
-    # Filter rows: no English words, but allow empty cells
-    table_data = [
-        row for row in table_data
-        if all(not has_english_words(cell) for cell in row if cell not in ("", None, np.nan))
-    ]
-
-    return [tuple(row + [keyword, page.number + 1]) for row in table_data]
-
-def extract_details_of_policy_charges(page):
-    """
-    Extracts the sum of columns 4,5,6 from a table on a PDF page containing
-    the keyword 'Details of Policy Charges' using PyMuPDF. Skips one row after every 10 rows.
-    
-    Args:
-        page: PyMuPDF page object to process
-    
-    Returns:
-        List of tuples with summed value, keyword, and page number
-    """
-    # Check if the keyword is present
-    keyword = "Details of Policy Charges"
-    page_text = page.get_text().lower()
-    if keyword.lower() not in page_text:
-        return []
-
-    # Define helper function to identify numeric or currency values
-    def is_numeric_or_currency(text):
-        return bool(re.match(r'^-?\$?\d{1,3}(,\d{3})*(\.\d+)?$|^-?\d+(\.\d+)?$|^-?\d*\.\d+%?$', text))
-
-    # Extract text spans within y-coordinate range
-    lines = []
-    blocks = page.get_text("dict")["blocks"]
-    for block in blocks:
-        for line in block.get("lines", []):
-            for span in line["spans"]:
-                y = span["bbox"][1]
-                if 100 < y < 750:  # Adjust range as needed
-                    lines.append((y, span["bbox"][0], span["text"].strip()))
-
-    if not lines:
-        return []
-
-    # Sort lines by y-coordinate (rounded to 1 decimal) then x-coordinate
-    lines.sort(key=lambda x: (round(x[0], 1), x[1]))
-
-    # Group lines into rows
-    table_data, current_row, last_y = [], [], None
-    for y, x, text in lines:
-        if last_y is None or abs(y - last_y) < 6:
-            current_row.append((x, text))
-        else:
-            current_row.sort()
-            row = [t for _, t in current_row]
-            if sum(is_numeric_or_currency(t) for t in row) >= 3:  # Require at least 3 numeric columns
-                table_data.append(row)
-            current_row = [(x, text)]
-        last_y = y
-
-    if current_row:
-        current_row.sort()
-        row = [t for _, t in current_row]
-        if sum(is_numeric_or_currency(t) for t in row) >= 3:
-            table_data.append(row)
-
-    if not table_data:
-        return []
-
-    # Sum columns 4,5,6 (0-based indices: 3,4,5)
-    sum_indices = [3, 4, 5]
-    def safe_float(val):
-        try:
-            val = str(val).strip()
-            if val.startswith('(') and val.endswith(')'):
-                val = '-' + val[1:-1]
-            val = val.replace('$', '').replace(',', '')
-            return float(val)
-        except (ValueError, AttributeError):
-            return 0.0
-
-    summed_values = [
-        abs(sum(safe_float(row[i]) for i in sum_indices if i < len(row)))
-        for row in table_data
-    ]
-
-    summed_values = [val for val in summed_values if val not in (0.0, None, np.nan)]
-
-    # Filter to skip one row after every 10 rows
-    filtered_values = [
-        val for i, val in enumerate(summed_values)
-        if (i % 11) != 10  # Skip every 11th row (index 10 in 0-based indexing)
-    ]
-
-    return [(val, keyword, page.number + 1) for val in filtered_values]
 
 def extract_tabular_detail_non_guaranteed(page):
     import numpy as np
@@ -1051,16 +879,6 @@ async def upload_pdf(file: UploadFile = File(...)):
                         data = extract_current_illustrated_rate_table(page)
                         if data:
                             tables_by_text["Current Illustrated Rate*"].extend(data)
-                            
-                    if "summary page: current policy charges" in text:
-                        data = extract_summary_page_current_policy_charges(page)
-                        if data:
-                            tables_by_text["Summary Page: Current Policy Charges"].extend(data)
-
-                    if "details of policy charges" in text:
-                        data = extract_details_of_policy_charges(page)
-                        if data:
-                            tables_by_text["Details of Policy Charges"].extend(data)
 
                 # Process Policy Charges and Other Expenses rows
                 if policy_charges_rows:
@@ -1089,8 +907,6 @@ async def upload_pdf(file: UploadFile = File(...)):
                 headers = (
                     UNIVERSAL_HEADER_FOR_SEVEN_COL_TABLES if num_data_columns == 7
                     else UNIVERSAL_HEADER_FOR_ONE_COL_TABLES if num_data_columns == 1
-                    else SUMMARY_PAGE_CURRENT_POLICY_CHARGES_HEADERS if keyword == "Summary Page: Current Policy Charges" and num_data_columns == 7
-                    else DETAILS_OF_POLICY_CHARGES_HEADERS if keyword == "Details of Policy Charges" and num_data_columns == 1
                     else []
                 )
 
