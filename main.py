@@ -2,8 +2,8 @@ from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.encoders import jsonable_encoder
-import fitz  # PyMuPDF
-import pdfplumber
+import fitz  # PyMuPDF for PDF text extraction
+import pdfplumber  # For advanced table extraction
 import pandas as pd
 import numpy as np
 from io import BytesIO
@@ -11,67 +11,73 @@ import logging
 from collections import Counter
 import re
 
-app = FastAPI()
+# ------------------------- Configuration -------------------------
 
+# Initialize FastAPI application
+app = FastAPI(title="PDF Table Extraction API")
+
+# Configure CORS middleware for cross-origin requests
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["*"],  # Allow all origins
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["*"],  # Allow all HTTP methods
+    allow_headers=["*"],  # Allow all headers
 )
 
+# Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ---------------------------- Config ----------------------------
-
+# Define keywords for PyMuPDF-based table extraction
 PYMUPDF_KEYWORDS = [
-    # NW
-    "Tabular Detail - Non Guaranteed",
-    "Annual Cost Summary",
-    # LSW
-    "Current Illustrated Rate*",
-    "Policy Charges and Other Expenses",
+    "Tabular Detail - Non Guaranteed",  # NW table identifier
+    "Annual Cost Summary",  # NW cost summary table
+    "Current Illustrated Rate*",  # LSW illustrated rate table
+    "Policy Charges and Other Expenses",  # LSW charges table
 ]
 
+# Define keywords for pdfplumber-based table extraction
 PDFPLUMBER_KEYWORDS = [
-    # MN
-    "Your policy's illustrated values",
-    "Your policy's current charges summary",
-    # ALZ
-    "Basic Ledger, Non-guaranteed scenario",
-    "Policy Charges Ledger",
+    "Your policy's illustrated values",  # MN illustrated values table
+    "Your policy's current charges summary",  # MN charges summary table
+    "Basic Ledger, Non-guaranteed scenario",  # ALZ ledger table
+    "Policy Charges Ledger",  # ALZ charges ledger
 ]
 
-# UNIVERSAL HEADER FOR ALL TABLES
+# Universal headers for standardizing table output
 UNIVERSAL_HEADER_FOR_SEVEN_COL_TABLES = [
-    "Policy Year","Age","Premium Outlay","Net Income","Cash Value","Surrender Value","Death Benefit"
+    "Policy Year", "Age", "Premium Outlay", "Net Income",
+    "Cash Value", "Surrender Value", "Death Benefit"
 ]
-UNIVERSAL_HEADER_FOR_ONE_COL_TABLES = [
-    "Charges"
-]
+UNIVERSAL_HEADER_FOR_ONE_COL_TABLES = ["Charges"]
 
+# Company-specific table headers
 HEADER_FOR_ALZ_TABLE = [
-    "Age","Policy Year","Premium Outlay","Net Income","Cash Value","Surrender Value","Death Benefit"
-] 
+    "Age", "Policy Year", "Premium Outlay", "Net Income",
+    "Cash Value", "Surrender Value", "Death Benefit"
+]
 HEADER_FOR_LSW_TABLE = [
-    "Policy Year","Age","Premium Outlay","Net Income","Cash Value","Surrender Value","Death Benefit"
-] 
+    "Policy Year", "Age", "Premium Outlay", "Net Income",
+    "Cash Value", "Surrender Value", "Death Benefit"
+]
 HEADER_FOR_MN_TABLE = [
-    "Policy Year","Age","Premium Outlay","Net Income","Cash Value","Surrender Value","Death Benefit"
-] 
+    "Policy Year", "Age", "Premium Outlay", "Net Income",
+    "Cash Value", "Surrender Value", "Death Benefit"
+]
 HEADER_FOR_NW_TABLE = [
-    "Policy Year","Age","Premium Outlay","Net Income","Cash Value","Surrender Value","Death Benefit"
-] 
+    "Policy Year", "Age", "Premium Outlay", "Net Income",
+    "Cash Value", "Surrender Value", "Death Benefit"
+]
 
-# NW
+# Header definitions for specific table types
 TABULAR_HEADERS = [
     "end of year", "age", "annualized premium outlay", "loans/partial surrenders",
     "total loan balance", "net annual outlay",
     "accumulated value (current)", "net surrender value (current)", "net death benefit (current)",
     "accumulated value (guaranteed)", "net surrender value (guaranteed)", "net death benefit (guaranteed)"
 ]
+
 COST_SUMMARY_HEADERS = [
     "Yr", "Age", "Premium Outlay", "Base COI", "Policy Expense",
     "Per 1000 (Base)", "Total Charges", "Loan Charges", "Loans & Partial Surrenders",
@@ -79,9 +85,8 @@ COST_SUMMARY_HEADERS = [
     "Net Death Benefit EOY"
 ]
 
-# MN
 ILLUSTRATED_VALUES_HEADERS = [
-    "Year","Age","Premium Outlay","Net Income",
+    "Year", "Age", "Premium Outlay", "Net Income",
     "[Guaranteed Values][2.00% crediting rate and maximum charges]Surrender Value",
     "[Guaranteed Values][2.00% crediting rate and maximum charges]Death Benefit",
     "[Non-Guaranteed Values][4.25% alternative crediting rate and current charges]Cash Value",
@@ -92,63 +97,72 @@ ILLUSTRATED_VALUES_HEADERS = [
     "[Non-Guaranteed Values][6.59% illustrated crediting rate and current charges]Death Benfit"
 ]
 
-# MN
 POLICY_CURRENT_CHARGES_SUMMARY_HEADERS = [
-    "Year","Age","Premium Outlay","Premium Charge",
-    "Cost of Insurance Charge","Policy Issue Charge",
-    "Additional Charges","Bonus Interest Credit",
-    "Additional Policy Credits","Surrenders and Loans",
+    "Year", "Age", "Premium Outlay", "Premium Charge",
+    "Cost of Insurance Charge", "Policy Issue Charge",
+    "Additional Charges", "Bonus Interest Credit",
+    "Additional Policy Credits", "Surrenders and Loans",
     "Interest and Crediting Earned",
     "[Non-Guaranteed Values][Using illustrated crediting rates and current charges]Cash Value",
     "[Non-Guaranteed Values][Using illustrated crediting rates and current charges]Surrender Value",
     "[Non-Guaranteed Values][Using illustrated crediting rates and current charges]Death Benfit"
 ]
 
-# LSW
 POLICY_CHARGES_HEADERS = [
     "Policy Year", "Age", "Premium Outlay", "Premium Expense Charge",
     "cost of insurance", "cost of other benefits", "policy fee",
     "Expense Charge", "Accumulated value charge", "Policy charges", "interest credit",
     "additional bonus", "total credits", "accumulated value", "Surrender charges", "cash surrender value",
-    "net death benefit","ex"
+    "net death benefit", "ex"
 ]
 
-# LSW
 CURRENT_ILLUSTRATED_RATE_HEADERS = [
-    "Policy year","Age","Premium Outlay","Planned annual income","Planned annual loan","Accumulated loan amount",
-    "Weighted average interest rate","Accumulated value","Cash surrender value","Net death benefit"
+    "Policy year", "Age", "Premium Outlay", "Planned annual income", "Planned annual loan",
+    "Accumulated loan amount", "Weighted average interest rate", "Accumulated value",
+    "Cash surrender value", "Net death benefit"
 ]
 
-# ---------------------- Helper Functions ----------------------
+# ------------------------- Helper Functions -------------------------
 
-# Added: Helper function to check if a cell contains English words (non-numeric/non-currency text)
-def has_english_words(text):
+def has_english_words(text: str) -> bool:
     """
-    Returns True if the text contains English words (non-numeric, non-currency, non-percentage).
+    Checks if the text contains English words (non-numeric, non-currency, non-percentage).
     Allows numbers, currency ($X,XXX.XX), percentages (X.XX%), and empty strings.
+    
+    Args:
+        text: String to check for English words.
+    
+    Returns:
+        bool: True if text contains English words, False otherwise.
     """
     if not text or text in ("", None, np.nan):
         return False
-    # Remove currency symbols, commas, and percentage signs
     cleaned = re.sub(r'[\$,%]', '', str(text)).strip()
-    # Check if the remaining text is purely numeric or a decimal
     return not bool(re.match(r'^-?\d*\.?\d*$', cleaned))
 
-
-def extract_filename(filename):
+def extract_filename(filename: str) -> str:
+    """
+    Extracts and returns the filename as provided.
+    
+    Args:
+        filename: Name of the uploaded file.
+    
+    Returns:
+        str: The filename.
+    """
     return filename
 
-# Added: Function to extract fields (illustration_date, insured_name, etc.)
-def extract_fields(pdf_text, filename):
+def extract_fields(pdf_text: str, filename: str) -> dict:
     """
-    Extracts specified fields from PDF text, with assumed_ror conditioned on filename keywords.
-    For ALZ files, extracts assumed_ror from the line below the first occurrence of
-    'current scenario indexed interest rate'.
+    Extracts specific fields (e.g., illustration_date, insured_name) from PDF text.
+    For ALZ files, extracts assumed_ror from the line below 'current scenario indexed interest rate'.
+    
     Args:
-        pdf_text: The text extracted from the PDF.
-        filename: The name of the uploaded PDF file.
+        pdf_text: Full text extracted from the PDF.
+        filename: Name of the uploaded PDF file.
+    
     Returns:
-        A dictionary with field values or None if not found.
+        dict: Dictionary containing extracted fields or None for missing fields.
     """
     fields = {
         "illustration_date": None,
@@ -159,77 +173,59 @@ def extract_fields(pdf_text, filename):
     }
     
     pages = pdf_text.split("page ")[1:]
-    page_1_text = pages[0].lower() if pages else text.lower()
-    
-    # Normalize text for case-insensitive matching
+    page_1_text = pages[0].lower() if pages else ""
     text = pdf_text.lower()
     filename = filename.lower()
-    
 
-    # Define default pattern for assumed_ror
+    # Define patterns for assumed_ror based on filename keywords
     default_ror_pattern = r"assumed\s*ror[:\s]*([\d.]+%)"
-
-    # Define keyword-based patterns for assumed_ror
-    ror_patterns = {
-        "nationwide": r"assumed\s*[:\s]*([\d.]+%)",  # NW-specific pattern
-        "lsw": r"illustrated\s*rate[:\s]*([\d.]+%)",  # LSW-specific pattern
-        "mn": r"crediting\s*rate[:\s]*([\d.]+%)"  # MN-specific pattern
+    related_ror_patterns = {
+        "nationwide": r"assumed\s*[:\s]*([\d.]+%)",
+        "lsw": r"illustrated\s*rate[:\s]*([\d.]+%)",
+        "mn": r"crediting\s*rate[:\s]*([\d.]+%)"
     }
-
     mn_ror_pattern = r"using\s*([\d.]+)%\s*illustrated\s*crediting\s*rate\s*and\s*current\s*charges"
-    
     nw_ror_pattern = r"(?:indexed\s*interest|assumed|illustrated\s*rate)\s*[\n\r\s]*([\d.]+%)"
-        
+
     # Handle assumed_ror for ALZ files
     if "alz" in filename:
         lines = pdf_text.splitlines()
         target_text = "Indexed interest rates"
-        found = False
         for i, line in enumerate(lines):
             if target_text.lower() in line.lower():
-                found = True
                 if i + 1 < len(lines):
                     next_line = lines[i + 1].strip()
                     match = re.search(r"(\d+\.?\d*%)", next_line)
                     if match:
                         fields["assumed_ror"] = match.group(1)
                         break
-                    
     elif "mnl" in filename:
         ror_match = re.search(mn_ror_pattern, text, re.IGNORECASE | re.DOTALL)
         if ror_match:
             fields["assumed_ror"] = f"{ror_match.group(1)}%"
         else:
-            # Fallback to the existing MN pattern if the primary pattern fails
-            ror_match = re.search(ror_patterns["mn"], text, re.IGNORECASE)
+            ror_match = re.search(related_ror_patterns["mn"], text, re.IGNORECASE)
             if ror_match:
                 fields["assumed_ror"] = ror_match.group(1).strip()
-                
     elif "nationwide" in filename:
-    # Search for percentage near 'indexed interest', 'assumed', or 'illustrated rate'
         ror_match = re.search(nw_ror_pattern, text, re.IGNORECASE | re.DOTALL)
         if ror_match:
             fields["assumed_ror"] = ror_match.group(1).strip()
-            # Debug: Log the match
-            print(f"Nationwide assumed_ror matched: {ror_match.group(1)}")
+            logger.debug(f"Nationwide assumed_ror matched: {ror_match.group(1)}")
         else:
-            # Fallback to broader pattern
             ror_match = re.search(r"assumed\s*[:\s]*([\d.]+%)", text, re.IGNORECASE)
             if ror_match:
                 fields["assumed_ror"] = ror_match.group(1).strip()
-                print(f"Nationwide fallback assumed_ror: {ror_match.group(1)}")
+                logger.debug(f"Nationwide fallback assumed_ror: {ror_match.group(1)}")
             else:
-                print("Nationwide assumed_ror not found")
-            
+                logger.debug("Nationwide assumed_ror not found")
     else:
-        # Select pattern for non-ALZ files
         selected_ror_pattern = default_ror_pattern
-        for keyword, pattern in ror_patterns.items():
+        for keyword, pattern in related_ror_patterns.items():
             if keyword in filename:
                 selected_ror_pattern = pattern
                 break
-        ror_pattern = selected_ror_pattern
-        match = re.search(ror_pattern, text, re.IGNORECASE)
+        match = re.search(selected_ror_pattern, text, re.IGNORECASE)
         if match:
             fields["assumed_ror"] = match.group(1).strip()
 
@@ -237,30 +233,28 @@ def extract_fields(pdf_text, filename):
     patterns = {
         "illustration_date": (
             r"(?:\billustration\s*date\b|prepared\s*on\b|issued\s*on\b|date\b)[:\s]*"
-            r"(\d{1,2}[/-]\d{1,2}[/-]\d{2,4}"  # MM/DD/YYYY or MM-DD-YYYY (e.g., 3/21/2025)
-            r"|\w+\s+\d{1,2},\s+\d{4}"         # Month DD, YYYY (e.g., March 21, 2025)
-            r"|\d{1,2}\s+\w+\s+\d{4}"          # DD Month YYYY (e.g., 21 March 2025)
-            r"|\d{4}-\d{2}-\d{2}"              # YYYY-MM-DD (e.g., 2025-03-21)
-            r"|\d{1,2}/\d{1,2}/\d{2})"         # MM/DD/YY (e.g., 03/21/25)
+            r"(\d{1,2}[/-]\d{1,2}[/-]\d{2,4}"  # MM/DD/YYYY or MM-DD-YYYY
+            r"|\w+\s+\d{1,2},\s+\d{4}"         # Month DD, YYYY
+            r"|\d{1,2}\s+\w+\s+\d{4}"          # DD Month YYYY
+            r"|\d{4}-\d{2}-\d{2}"              # YYYY-MM-DD
+            r"|\d{1,2}/\d{1,2}/\d{2})"         # MM/DD/YY
         ),
-        
-        # "insured_name": r"(?:prepared\s*for|for)\s*:\s*\n*([A-Za-z][^\n:]{2,50})",
-        # "insured_name": r"(?:prepared\s*for|for)\s*:?\s*\n*([A-Za-z][^\n:]{2,50})",
-        # "insured_name": r"(?:prepared\s*for|for)\s*:?\s*\n*([A-Za-z][^\n]{2,50})(?=\n|$)",
         "insured_name": r"(?:prepared\s*for|for)\s*:?\s*\n*\s*([A-Za-z][^\n]{2,50})(?=\n|$)",
-                
         "initial_death_benefit": r"initial\s*death\s*benefit[:\s]*[\$]?([\d,]+\.?\d*)",
         "minimum_initial_pmt": r"minimum\s*initial\s*pmt[:\s]*[\$]?([\d,]+\.?\d*)"
     }
-    
+
+    # Extract fields using regex patterns
     for field, pattern in patterns.items():
         match = re.search(pattern, text, re.IGNORECASE)
         if match:
             fields[field] = match.group(1).strip()
-    
+
     return fields
 
-# ---------------------- PyMuPDF Extraction ----------------------
+# ------------------------- Table Extraction Functions -------------------------
+
+# Note: The following functions are unchanged as per request to preserve table extraction logic.
 
 def extract_tabular_detail_non_guaranteed(page):
     import numpy as np
@@ -348,7 +342,7 @@ def extract_tabular_detail_non_guaranteed(page):
             # Short row: map values to early non-Lapse indices, then place last values in final non-Lapse indices
             values_to_place = len(row)
             if values_to_place > 6:  # More than the first 6 non-Lapse indices (0,1,2,3,4,5)
-                # Place the last 3 values in indices  nihilism
+                # Place the last 3 values in indices 9,10,11
                 for i in non_lapse_list[:6]:
                     if val_idx < values_to_place - 3:
                         new_row[i] = row[val_idx]
@@ -444,7 +438,6 @@ def extract_annual_cost_summary(page):
         for row in table_data
     ]
 
-    # Filter out zero or None sums
     summed_values = [val for val in summed_values if val not in (0.0, None, np.nan)]
 
     keyword = "Annual Cost Summary"
@@ -604,8 +597,6 @@ def extract_policy_charges_table(page, POLICY_CHARGES_HEADERS):
 
     # Step 11: Return the single-column table
     return selected_columns
-
-# ------------------- pdfplumber Flexible Logic ------------------
 
 def extract_tables_with_flexible_headers(pdf):
     tables_by_text = {text: [] for text in PDFPLUMBER_KEYWORDS}
@@ -804,27 +795,9 @@ def extract_tables_with_flexible_headers(pdf):
             if keyword.lower() == "basic ledger, non-guaranteed scenario":
                 headers = HEADER_FOR_ALZ_TABLE
             elif num_data_columns == 7:
-                # Use universal header for 7-column tables
                 headers = UNIVERSAL_HEADER_FOR_SEVEN_COL_TABLES
             elif num_data_columns == 1:
-                # Use universal header for 1-column tables
                 headers = UNIVERSAL_HEADER_FOR_ONE_COL_TABLES
-            # else:
-            #     # Fallback to existing headers for other cases
-            #     if keyword.lower() == "your policy's current charges summary":
-            #         headers = ["Total Charges Sum"]
-            #     elif keyword.lower() == "policy charges ledger":
-            #         headers = [filtered_headers[0] if filtered_headers else "Column_10"]
-            #     else:
-            #         selected_indices = {
-            #             "your policy's illustrated values": [0, 1, 2, 3, 9, 10, 11],
-            #             "basic ledger, non-guaranteed scenario": [0, 1, 2, 3, 7, 8, 9]
-            #         }.get(keyword.lower(), [0, 1, 2, 3])
-            #         header_map = {
-            #             "your policy's illustrated values": ILLUSTRATED_VALUES_HEADERS,
-            #             "basic ledger, non-guaranteed scenario": headers if keyword.lower() == "basic ledger, non-guaranteed scenario" else ["Year", "Age", "Premium Outlay", "Net Income"]
-            #         }.get(keyword.lower(), ["Year", "Age", "Premium Outlay", "Net Income"])
-            #         headers = [header_map[i] for i in selected_indices if i < len(header_map)]
 
             # Create DataFrame with appropriate headers plus metadata columns
             df = pd.DataFrame(
@@ -837,41 +810,56 @@ def extract_tables_with_flexible_headers(pdf):
 
     return combined_tables
 
-# --------------------------- Main API ---------------------------
+# ------------------------- API Endpoint -------------------------
 
-@app.post("/upload-pdf/")
+@app.post("/upload-pdf/", response_model=dict)
 async def upload_pdf(file: UploadFile = File(...)):
+    """
+    Endpoint to upload and process a PDF file, extracting specified tables and fields.
+    
+    Args:
+        file: Uploaded PDF file.
+    
+    Returns:
+        JSONResponse: Extracted tables and fields, or a message if no data is extracted.
+    
+    Raises:
+        HTTPException: If processing fails due to an error.
+    """
     try:
+        # Read PDF file content
         content = await file.read()
         pdf_file = BytesIO(content)
-
         results = []
+
+        # Initialize storage for PyMuPDF-extracted tables
         tables_by_text = {k: [] for k in PYMUPDF_KEYWORDS}
 
-        # Modified: Extract all text for both keywords and fields
+        # Extract full text for field extraction and keyword detection
         all_text = ""
         with fitz.open(stream=pdf_file, filetype="pdf") as doc:
             for page in doc:
-                all_text += page.get_text("text") + "\n"  # Added newline for better pattern matching
-        
-        # Modified: Extract fields (optional, may return None for missing fields)
+                all_text += page.get_text("text") + "\n"
+
+        # Extract fields (e.g., illustration_date, insured_name)
         extracted_fields = extract_fields(all_text, file.filename)
 
-        # Modified: Check for keywords in lowercase text
+        # Check for keywords in the PDF text
         found_keywords = [k for k in PYMUPDF_KEYWORDS + PDFPLUMBER_KEYWORDS if k.lower() in all_text.lower()]
 
-        # Modified: Return early only if no keywords or fields are found
+        # Return early if no keywords or fields are found
         if not found_keywords and not any(extracted_fields.values()):
+            logger.info("No matching keywords or fields found in the PDF.")
             return JSONResponse(content={"message": "No matching keywords or fields found."}, status_code=200)
 
+        # Process PyMuPDF-based table extractions
         if any(k in found_keywords for k in PYMUPDF_KEYWORDS):
             pdf_file.seek(0)
             with fitz.open(stream=pdf_file, filetype="pdf") as doc:
                 policy_charges_rows = []
-                
                 for page_num, page in enumerate(doc):
                     text = page.get_text("text").lower()
-                    
+
                     if "annual cost summary" in text:
                         data = extract_annual_cost_summary(page)
                         if data:
@@ -881,93 +869,67 @@ async def upload_pdf(file: UploadFile = File(...)):
                         data = extract_tabular_detail_non_guaranteed(page)
                         if data:
                             tables_by_text["Tabular Detail - Non Guaranteed"].extend(data)
-                    
-                    # --- CHATGPT ---
-                    if "policy charges and other expenses" in text.lower():
-                        data = extract_policy_charges_table(page, POLICY_CHARGES_HEADERS)
-                        if data: 
-                            policy_charges_rows.extend(data)
-                    # --- CHATGPT ---
 
-                    if "current illustrated rate*" in text.lower():
+                    if "policy charges and other expenses" in text:
+                        data = extract_policy_charges_table(page, POLICY_CHARGES_HEADERS)
+                        if data:
+                            policy_charges_rows.extend(data)
+
+                    if "current illustrated rate*" in text:
                         data = extract_current_illustrated_rate_table(page)
                         if data:
                             tables_by_text["Current Illustrated Rate*"].extend(data)
 
                 # Process Policy Charges and Other Expenses rows
                 if policy_charges_rows:
-                    # Skip every 6th row
                     filtered_policy_charges_rows = [row for i, row in enumerate(policy_charges_rows, 1) if i % 6 != 0]
-                    
-                    # Add metadata to filtered rows (assuming page number from first page with data)
-                    # Note: If you need specific page numbers, you may need to track pages during collection
                     data_with_metadata = [
                         row + ["Policy Charges and Other Expenses", min(page_num + 1 for page_num, page in enumerate(doc) if "policy charges and other expenses" in page.get_text("text").lower())]
                         for row in filtered_policy_charges_rows if len(row) == 1
                     ]
-                    
                     if not data_with_metadata:
                         logger.warning("No valid rows with 1 column for Policy Charges and Other Expenses after filtering")
                     else:
                         tables_by_text["Policy Charges and Other Expenses"].extend(data_with_metadata)
-                    
+
+        # Convert PyMuPDF results to DataFrames
         for keyword in PYMUPDF_KEYWORDS:
             if tables_by_text[keyword]:
-                # Modified: Filter rows with no empty cells and no English words
-                if keyword == "Policy Charges and Other Expenses":
-                    valid_rows = [
-                        row for row in tables_by_text[keyword]
-                        if all(cell not in ("", None, np.nan) for cell in row[:-2])  # No empty cells
-                    ]
-                else:
-                    valid_rows = [
-                        row for row in tables_by_text[keyword]
-                        if all(cell not in ("", None, np.nan) for cell in row[:-2]) and  # No empty cells
-                        all(not has_english_words(cell) for cell in row[:-2])  # No English words
-                    ]
+                valid_rows = [
+                    row for row in tables_by_text[keyword]
+                    if all(cell not in ("", None, np.nan) for cell in row[:-2]) and
+                    (keyword == "Policy Charges and Other Expenses" or all(not has_english_words(cell) for cell in row[:-2]))
+                ]
                 if not valid_rows:
                     continue
-                
-                # --- WEDNESDAY ---
-                # Determine the number of data columns (excluding Source_Text and Page_Number)
-                num_data_columns = len(valid_rows[0]) - 2  # Subtract 2 for metadata columns
-                # --- WEDNESDAY ---
-                
-                # --- WEDNESDAY ---
-                # Assign headers based on number of data columns
-                if num_data_columns == 7:
-                    # Use universal header for 7-column tables
-                    headers = UNIVERSAL_HEADER_FOR_SEVEN_COL_TABLES
-                elif num_data_columns == 1:
-                    # Use universal header for 1-column tables
-                    headers = UNIVERSAL_HEADER_FOR_ONE_COL_TABLES
 
-                # Create DataFrame with appropriate headers plus metadata columns
-                df = pd.DataFrame(
-                    valid_rows,
-                    columns=headers + ["Source_Text", "Page_Number"]
+                num_data_columns = len(valid_rows[0]) - 2
+                headers = (
+                    UNIVERSAL_HEADER_FOR_SEVEN_COL_TABLES if num_data_columns == 7
+                    else UNIVERSAL_HEADER_FOR_ONE_COL_TABLES if num_data_columns == 1
+                    else []
                 )
-                # --- WEDNESDAY ---
 
-                if not df.empty:
-                    print(f"\nExtracted Table: {keyword} (Combined)")
-                    print(df.to_string(index=False))
-                    results.append({
-                        "source": keyword,
-                        "page": int(df["Page_Number"].min()),
-                        "keyword": keyword,
-                        "extractor": "PyMuPDF",
-                        "data": df.replace([np.nan, np.inf, -np.inf], None).to_dict(orient="records")
-                    })
+                if headers:
+                    df = pd.DataFrame(valid_rows, columns=headers + ["Source_Text", "Page_Number"])
+                    if not df.empty:
+                        logger.info(f"Extracted Table: {keyword} (Combined)\n{df.to_string(index=False)}")
+                        results.append({
+                            "source": keyword,
+                            "page": int(df["Page_Number"].min()),
+                            "keyword": keyword,
+                            "extractor": "PyMuPDF",
+                            "data": df.replace([np.nan, np.inf, -np.inf], None).to_dict(orient="records")
+                        })
 
+        # Process pdfplumber-based table extractions
         if any(k in found_keywords for k in PDFPLUMBER_KEYWORDS):
             pdf_file.seek(0)
             with pdfplumber.open(pdf_file) as pdf:
                 tables = extract_tables_with_flexible_headers(pdf)
                 for source_text, df in tables.items():
                     if df is not None and not df.empty:
-                        print(f"\nExtracted Table: {source_text} (Combined)")
-                        print(df.to_string(index=False))
+                        logger.info(f"Extracted Table: {source_text} (Combined)\n{df.to_string(index=False)}")
                         results.append({
                             "source": source_text,
                             "page": int(df["Page_Number"].min()),
@@ -975,19 +937,20 @@ async def upload_pdf(file: UploadFile = File(...)):
                             "extractor": "pdfplumber",
                             "data": df.replace([np.nan, np.inf, -np.inf], None).to_dict(orient="records")
                         })
-                        
-        # Modified: Include fields in response, even if empty
+
+        # Prepare response with fields and tables
         response = {
             "fields": extracted_fields,
             "tables": jsonable_encoder(results)
         }
-        
-        # Modified: Return message if no tables or fields are extracted
+
+        # Return message if no tables or fields are extracted
         if not results and not any(extracted_fields.values()):
+            logger.info("No tables or fields extracted from the PDF.")
             return JSONResponse(content={"message": "No tables or fields extracted."}, status_code=200)
 
         return JSONResponse(content=response, status_code=200)
 
     except Exception as e:
-        logger.error(f"Processing failed: {str(e)}")
+        logger.error(f"Processing failed: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Processing failed: {str(e)}")

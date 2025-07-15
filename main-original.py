@@ -46,11 +46,24 @@ PDFPLUMBER_KEYWORDS = [
 
 # UNIVERSAL HEADER FOR ALL TABLES
 UNIVERSAL_HEADER_FOR_SEVEN_COL_TABLES = [
-    "Age","Policy Year","Premium Outlay","Net Outlay","Cash Value","Surrender Value","Death Benefit"
+    "Policy Year","Age","Premium Outlay","Net Income","Cash Value","Surrender Value","Death Benefit"
 ]
 UNIVERSAL_HEADER_FOR_ONE_COL_TABLES = [
     "Charges"
 ]
+
+HEADER_FOR_ALZ_TABLE = [
+    "Age","Policy Year","Premium Outlay","Net Income","Cash Value","Surrender Value","Death Benefit"
+] 
+HEADER_FOR_LSW_TABLE = [
+    "Policy Year","Age","Premium Outlay","Net Income","Cash Value","Surrender Value","Death Benefit"
+] 
+HEADER_FOR_MN_TABLE = [
+    "Policy Year","Age","Premium Outlay","Net Income","Cash Value","Surrender Value","Death Benefit"
+] 
+HEADER_FOR_NW_TABLE = [
+    "Policy Year","Age","Premium Outlay","Net Income","Cash Value","Surrender Value","Death Benefit"
+] 
 
 # NW
 TABULAR_HEADERS = [
@@ -68,7 +81,7 @@ COST_SUMMARY_HEADERS = [
 
 # MN
 ILLUSTRATED_VALUES_HEADERS = [
-    "Year","Age","Premium Outlay","Net Outlay",
+    "Year","Age","Premium Outlay","Net Income",
     "[Guaranteed Values][2.00% crediting rate and maximum charges]Surrender Value",
     "[Guaranteed Values][2.00% crediting rate and maximum charges]Death Benefit",
     "[Non-Guaranteed Values][4.25% alternative crediting rate and current charges]Cash Value",
@@ -121,11 +134,21 @@ def has_english_words(text):
     # Check if the remaining text is purely numeric or a decimal
     return not bool(re.match(r'^-?\d*\.?\d*$', cleaned))
 
+
+def extract_filename(filename):
+    return filename
+
 # Added: Function to extract fields (illustration_date, insured_name, etc.)
-def extract_fields(pdf_text):
+def extract_fields(pdf_text, filename):
     """
-    Extracts specified fields from PDF text using regex patterns.
-    Returns a dictionary with field values or None if not found.
+    Extracts specified fields from PDF text, with assumed_ror conditioned on filename keywords.
+    For ALZ files, extracts assumed_ror from the line below the first occurrence of
+    'current scenario indexed interest rate'.
+    Args:
+        pdf_text: The text extracted from the PDF.
+        filename: The name of the uploaded PDF file.
+    Returns:
+        A dictionary with field values or None if not found.
     """
     fields = {
         "illustration_date": None,
@@ -135,15 +158,98 @@ def extract_fields(pdf_text):
         "minimum_initial_pmt": None
     }
     
+    pages = pdf_text.split("page ")[1:]
+    page_1_text = pages[0].lower() if pages else ""
+    
     # Normalize text for case-insensitive matching
     text = pdf_text.lower()
+    filename = filename.lower()
     
-    # Patterns for each field
+
+    # Define default pattern for assumed_ror
+    default_ror_pattern = r"assumed\s*ror[:\s]*([\d.]+%)"
+
+    # Define keyword-based patterns for assumed_ror
+    ror_patterns = {
+        "nationwide": r"assumed\s*[:\s]*([\d.]+%)",  # NW-specific pattern
+        "lsw": r"illustrated\s*rate[:\s]*([\d.]+%)",  # LSW-specific pattern
+        "mn": r"crediting\s*rate[:\s]*([\d.]+%)"  # MN-specific pattern
+    }
+
+    mn_ror_pattern = r"using\s*([\d.]+)%\s*illustrated\s*crediting\s*rate\s*and\s*current\s*charges"
+    
+    nw_ror_pattern = r"(?:indexed\s*interest|assumed|illustrated\s*rate)\s*[\n\r\s]*([\d.]+%)"
+        
+    # Handle assumed_ror for ALZ files
+    if "alz" in filename:
+        lines = pdf_text.splitlines()
+        target_text = "Indexed interest rates"
+        found = False
+        for i, line in enumerate(lines):
+            if target_text.lower() in line.lower():
+                found = True
+                if i + 1 < len(lines):
+                    next_line = lines[i + 1].strip()
+                    match = re.search(r"(\d+\.?\d*%)", next_line)
+                    if match:
+                        fields["assumed_ror"] = match.group(1)
+                        break
+                    
+    elif "mnl" in filename:
+        ror_match = re.search(mn_ror_pattern, text, re.IGNORECASE | re.DOTALL)
+        if ror_match:
+            fields["assumed_ror"] = f"{ror_match.group(1)}%"
+        else:
+            # Fallback to the existing MN pattern if the primary pattern fails
+            ror_match = re.search(ror_patterns["mn"], text, re.IGNORECASE)
+            if ror_match:
+                fields["assumed_ror"] = ror_match.group(1).strip()
+                
+    elif "nationwide" in filename:
+    # Search for percentage near 'indexed interest', 'assumed', or 'illustrated rate'
+        ror_match = re.search(nw_ror_pattern, text, re.IGNORECASE | re.DOTALL)
+        if ror_match:
+            fields["assumed_ror"] = ror_match.group(1).strip()
+            # Debug: Log the match
+            print(f"Nationwide assumed_ror matched: {ror_match.group(1)}")
+        else:
+            # Fallback to broader pattern
+            ror_match = re.search(r"assumed\s*[:\s]*([\d.]+%)", text, re.IGNORECASE)
+            if ror_match:
+                fields["assumed_ror"] = ror_match.group(1).strip()
+                print(f"Nationwide fallback assumed_ror: {ror_match.group(1)}")
+            else:
+                print("Nationwide assumed_ror not found")
+            
+    else:
+        # Select pattern for non-ALZ files
+        selected_ror_pattern = default_ror_pattern
+        for keyword, pattern in ror_patterns.items():
+            if keyword in filename:
+                selected_ror_pattern = pattern
+                break
+        ror_pattern = selected_ror_pattern
+        match = re.search(ror_pattern, text, re.IGNORECASE)
+        if match:
+            fields["assumed_ror"] = match.group(1).strip()
+
+    # Define patterns for other fields
     patterns = {
-        "illustration_date": r"illustration\s*date[:\s]*(\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|\w+\s+\d{1,2},\s+\d{4})",
-        "insured_name": r"insured\s*(?:name)?[:\s]*([a-z\s]+?)(?=\n|$|[a-z\s]*:)",
+        "illustration_date": (
+            r"(?:\billustration\s*date\b|prepared\s*on\b|issued\s*on\b|date\b)[:\s]*"
+            r"(\d{1,2}[/-]\d{1,2}[/-]\d{2,4}"  # MM/DD/YYYY or MM-DD-YYYY (e.g., 3/21/2025)
+            r"|\w+\s+\d{1,2},\s+\d{4}"         # Month DD, YYYY (e.g., March 21, 2025)
+            r"|\d{1,2}\s+\w+\s+\d{4}"          # DD Month YYYY (e.g., 21 March 2025)
+            r"|\d{4}-\d{2}-\d{2}"              # YYYY-MM-DD (e.g., 2025-03-21)
+            r"|\d{1,2}/\d{1,2}/\d{2})"         # MM/DD/YY (e.g., 03/21/25)
+        ),
+        
+        # "insured_name": r"(?:prepared\s*for|for)\s*:\s*\n*([A-Za-z][^\n:]{2,50})",
+        # "insured_name": r"(?:prepared\s*for|for)\s*:?\s*\n*([A-Za-z][^\n:]{2,50})",
+        # "insured_name": r"(?:prepared\s*for|for)\s*:?\s*\n*([A-Za-z][^\n]{2,50})(?=\n|$)",
+        "insured_name": r"(?:prepared\s*for|for)\s*:?\s*\n*\s*([A-Za-z][^\n]{2,50})(?=\n|$)",
+                
         "initial_death_benefit": r"initial\s*death\s*benefit[:\s]*[\$]?([\d,]+\.?\d*)",
-        "assumed_ror": r"assumed\s*ror[:\s]*([\d.]+%)",
         "minimum_initial_pmt": r"minimum\s*initial\s*pmt[:\s]*[\$]?([\d,]+\.?\d*)"
     }
     
@@ -394,71 +500,110 @@ def extract_current_illustrated_rate_table(page):
 
     return results
 
-# --- CHATGPT ---
 def extract_policy_charges_table(page, POLICY_CHARGES_HEADERS):
-    import re
-    import logging
+    """
+    Extracts the 9th column from a table on a PDF page containing the keyword
+    "Policy Charges and Other Expenses" after transposing and reversing the table.
+    Skips rows where the 9th column is empty.
+    
+    Args:
+        page: PyMuPDF page object to process
+        POLICY_CHARGES_HEADERS: List of header names for the output table
+    Returns:
+        List of single-column rows (column 9) with non-empty cells, or empty list if no data
+    """
 
-    logger = logging.getLogger(__name__)
-
+    # Step 1: Check if the keyword "Policy Charges and Other Expenses" is on the page
+    keyword = "Policy Charges and Other Expenses"
+    page_text = page.get_text().lower()
+    if keyword.lower() not in page_text:    
+        return []  # Skip page if keyword is missing
+    
+    # Step 2: Define helper function to identify numeric or currency values
     def is_numeric_or_currency(text):
+        """
+        Checks if text is a numeric or currency value (e.g., 123, $1,234.56, -45.67).
+        Args:
+            text: String to check
+        Returns:
+            Boolean indicating if the text matches the pattern
+        """
         return bool(re.match(r'^-?\$?\d{1,3}(,\d{3})*(\.\d+)?$|^-?\d+(\.\d+)?$', text))
 
+    # Step 3: Extract text spans within y-coordinate range (20 to 1000)
     lines = []
-    blocks = page.get_text("dict")["blocks"]
+    blocks = page.get_text("dict")["blocks"]  # Get structured text blocks
 
     for block in blocks:
         for line in block.get("lines", []):
             for span in line["spans"]:
-                y = span["bbox"][1]
-                if 20 < y < 1000:
+                y = span["bbox"][1]  # Get y-coordinate of the text span
+                if 20 < y < 1000:  # Filter spans within vertical range
+                    # Store (y-coordinate, x-coordinate, text) for sorting
                     lines.append((y, span["bbox"][0], span["text"].strip()))
 
+    if not lines:
+        return []  # Return empty if no text found
+
+    # Step 4: Sort lines by y-coordinate (rounded to 1 decimal) then x-coordinate
+    # This groups text into rows and orders columns left-to-right
     lines.sort(key=lambda x: (round(x[0], 1), x[1]))
 
+    # Step 5: Group lines into rows based on y-coordinate proximity
     table_data, current_row, last_y = [], [], None
     for y, x, text in lines:
-        if last_y is None or abs(y - last_y) < 5:
+        # If no previous y or y is within 18 units, add to current row
+        if last_y is None or abs(y - last_y) < 18:
             current_row.append((x, text))
         else:
+            # Sort current row by x-coordinate to ensure left-to-right order
             current_row.sort()
-            row = [t for _, t in current_row if is_numeric_or_currency(t)]
-            if len(row) >= 3:
-                table_data.append(row)
-            current_row = [(x, text)]
+            # Extract all values, preserving empty or non-numeric cells
+            all_values = [t for _, t in current_row]
+            # Include row if it has at least 3 numeric values
+            row_values = [t if is_numeric_or_currency(t) else "" for t in all_values]
+            if sum(1 for t in row_values if t) >= 3:  # At least 3 non-empty numeric values
+                table_data.append(row_values)
+            current_row = [(x, text)]  # Start new row
         last_y = y
 
+    # Process the last row
     if current_row:
         current_row.sort()
-        row = [t for _, t in current_row if is_numeric_or_currency(t)]
-        if len(row) >= 3:
-            table_data.append(row)
+        all_values = [t for _, t in current_row]
+        row_values = [t if is_numeric_or_currency(t) else "" for t in all_values]
+        if sum(1 for t in row_values if t) >= 3:
+            table_data.append(row_values)
 
     if not table_data:
-        logger.info("No valid table data extracted for Policy Charges and Other Expenses")
-        return []
+        return []  # Return empty if no valid rows
 
-    # 🔁 Transpose: rows -> columns
+    # Step 6: Pad rows to ensure consistent length for transposition
+    # Add empty strings to shorter rows to match the longest row
+    max_len = max(len(row) for row in table_data)
+    table_data = [row + [""] * (max_len - len(row)) for row in table_data]
+
+    # Step 7: Transpose the table (rows become columns, columns become rows)
     transposed_data = list(map(list, zip(*table_data)))
 
-    # 🔄 Reverse each row of the transposed table to make the last column the first
+    # Step 8: Reverse each row to make the last column the first
     reversed_data = [row[::-1] for row in transposed_data]
-
-    # 🪵 Log the reversed table
-    logger.info("Reversed Policy Charges Table:")
     for i, row in enumerate(reversed_data):
         logger.info(f"Row {i + 1}: {row}")
 
-    # Select only the desired columns: 1, 2, 3, 4, 8, 9, 10
-    selected_columns = [[row[9]] for row in reversed_data]
+    # Step 9: Clean rows by excluding those with exactly 10 non-empty cells
+    # Keep empty cells as they are
+    cleaned_rows = [row for row in reversed_data if len([cell for cell in row if cell.strip() or cell == "0"]) != 10]
+    for i, row in enumerate(cleaned_rows):
+        logger.info(f"Row {i + 1}: {row}")
 
-    # 🪵 Log the selected columns table
-    logger.info("Selected Columns from Reversed Policy Charges Table:")
+    # Step 10: Select the 9th column (index 8) from rows with sufficient length, skipping empty cells
+    selected_columns = [[row[8]] for row in cleaned_rows if len(row) > 8 and (row[8].strip() or row[8] == "0")]
     for i, row in enumerate(selected_columns):
         logger.info(f"Row {i + 1}: {row}")
 
+    # Step 11: Return the single-column table
     return selected_columns
-# --- CHATGPT ---
 
 # ------------------- pdfplumber Flexible Logic ------------------
 
@@ -466,8 +611,6 @@ def extract_tables_with_flexible_headers(pdf):
     tables_by_text = {text: [] for text in PDFPLUMBER_KEYWORDS}
     policy_charges_ledger_rows = []
     policy_charges_ledger_pages = []
-    
-    logger = logging.getLogger(__name__)
 
     for page in pdf.pages:
         text = (page.extract_text() or "").lower()
@@ -489,12 +632,10 @@ def extract_tables_with_flexible_headers(pdf):
                         headers = ILLUSTRATED_VALUES_HEADERS
                         cleaned = [row for row in cleaned if any(cell for cell in row)]
                         if len(cleaned) < 5:
-                            logger.warning(f"Table on page {page.page_number} has {len(cleaned)} rows, cannot skip 5 rows")
                             data_rows = cleaned
                         else:
                             data_rows = cleaned[5:]
                             if not data_rows:
-                                logger.info(f"No data rows remain after skipping top 5 rows on page {page.page_number}")
                                 continue
                         data_rows = [row[:len(headers)] + [""] * (len(headers) - len(row)) for row in data_rows]
 
@@ -512,24 +653,25 @@ def extract_tables_with_flexible_headers(pdf):
                             tuple(row + [keyword, page.page_number])
                             for row in data_rows
                         ])
-
+                    
                     elif keyword.lower() == "your policy's current charges summary":
                         headers = POLICY_CURRENT_CHARGES_SUMMARY_HEADERS
-                        cleaned = [row for row in cleaned if any(cell for cell in row)]
-                        if len(cleaned) < 3:
-                            logger.warning(f"Table on page {page.page_number} has {len(cleaned)} rows, cannot skip 3 rows")
+                        # Filter out rows with any empty cells (excluding 0)
+                        cleaned = [
+                            row for row in cleaned 
+                            if all(
+                                cell is not None and str(cell).strip() != "" 
+                                for cell in row
+                            )
+                        ]
+                        if len(cleaned) < 1:
                             data_rows = cleaned
                         else:
-                            remaining_rows = cleaned[3:]
-                            data_rows = []
-                            i = 0
-                            while i < len(remaining_rows):
-                                data_rows.extend(remaining_rows[i:i+5])
-                                i += 6
+                            data_rows = cleaned[1:]
                             if not data_rows:
-                                logger.info(f"No data rows remain after skipping top 3 rows on page {page.page_number}")
                                 continue
-
+                        data_rows = [row[:len(headers)] + [""] * (len(headers) - len(row)) for row in data_rows]
+                        
                         sum_indices = [3, 4, 5, 6]
                         def safe_float(val):
                             try:
@@ -546,7 +688,6 @@ def extract_tables_with_flexible_headers(pdf):
                             for row in data_rows
                         ]
 
-                        # Modified: Filter out zero or None sums (indicating empty/invalid cells)
                         summed_values = [val for val in summed_values if val not in (0.0, None, np.nan)]
                         summed_values = [abs(val) for val in summed_values]
                         tables_by_text[keyword].extend([
@@ -660,7 +801,9 @@ def extract_tables_with_flexible_headers(pdf):
             num_data_columns = len(tables_by_text[keyword][0]) - 2  # Subtract 2 for metadata columns
 
             # Assign headers based on number of data columns
-            if num_data_columns == 7:
+            if keyword.lower() == "basic ledger, non-guaranteed scenario":
+                headers = HEADER_FOR_ALZ_TABLE
+            elif num_data_columns == 7:
                 # Use universal header for 7-column tables
                 headers = UNIVERSAL_HEADER_FOR_SEVEN_COL_TABLES
             elif num_data_columns == 1:
@@ -679,8 +822,8 @@ def extract_tables_with_flexible_headers(pdf):
             #         }.get(keyword.lower(), [0, 1, 2, 3])
             #         header_map = {
             #             "your policy's illustrated values": ILLUSTRATED_VALUES_HEADERS,
-            #             "basic ledger, non-guaranteed scenario": headers if keyword.lower() == "basic ledger, non-guaranteed scenario" else ["Year", "Age", "Premium Outlay", "Net Outlay"]
-            #         }.get(keyword.lower(), ["Year", "Age", "Premium Outlay", "Net Outlay"])
+            #             "basic ledger, non-guaranteed scenario": headers if keyword.lower() == "basic ledger, non-guaranteed scenario" else ["Year", "Age", "Premium Outlay", "Net Income"]
+            #         }.get(keyword.lower(), ["Year", "Age", "Premium Outlay", "Net Income"])
             #         headers = [header_map[i] for i in selected_indices if i < len(header_map)]
 
             # Create DataFrame with appropriate headers plus metadata columns
@@ -712,7 +855,7 @@ async def upload_pdf(file: UploadFile = File(...)):
                 all_text += page.get_text("text") + "\n"  # Added newline for better pattern matching
         
         # Modified: Extract fields (optional, may return None for missing fields)
-        extracted_fields = extract_fields(all_text)
+        extracted_fields = extract_fields(all_text, file.filename)
 
         # Modified: Check for keywords in lowercase text
         found_keywords = [k for k in PYMUPDF_KEYWORDS + PDFPLUMBER_KEYWORDS if k.lower() in all_text.lower()]
@@ -724,6 +867,8 @@ async def upload_pdf(file: UploadFile = File(...)):
         if any(k in found_keywords for k in PYMUPDF_KEYWORDS):
             pdf_file.seek(0)
             with fitz.open(stream=pdf_file, filetype="pdf") as doc:
+                policy_charges_rows = []
+                
                 for page_num, page in enumerate(doc):
                     text = page.get_text("text").lower()
                     
@@ -740,17 +885,8 @@ async def upload_pdf(file: UploadFile = File(...)):
                     # --- CHATGPT ---
                     if "policy charges and other expenses" in text.lower():
                         data = extract_policy_charges_table(page, POLICY_CHARGES_HEADERS)
-                        if data:
-                            # Validate and add metadata columns
-                            data_with_metadata = [
-                                row + ["Policy Charges and Other Expenses", page_num + 1]
-                                for row in data if len(row) == 1
-                            ]
-                            if not data_with_metadata:
-                                logger.warning("No valid rows with 7 columns for Policy Charges and Other Expenses")
-                            else:
-                                logger.info(f"Appending {len(data_with_metadata)} rows with 9 columns for Policy Charges and Other Expenses")
-                                tables_by_text["Policy Charges and Other Expenses"].extend(data_with_metadata)
+                        if data: 
+                            policy_charges_rows.extend(data)
                     # --- CHATGPT ---
 
                     if "current illustrated rate*" in text.lower():
@@ -758,6 +894,23 @@ async def upload_pdf(file: UploadFile = File(...)):
                         if data:
                             tables_by_text["Current Illustrated Rate*"].extend(data)
 
+                # Process Policy Charges and Other Expenses rows
+                if policy_charges_rows:
+                    # Skip every 6th row
+                    filtered_policy_charges_rows = [row for i, row in enumerate(policy_charges_rows, 1) if i % 6 != 0]
+                    
+                    # Add metadata to filtered rows (assuming page number from first page with data)
+                    # Note: If you need specific page numbers, you may need to track pages during collection
+                    data_with_metadata = [
+                        row + ["Policy Charges and Other Expenses", min(page_num + 1 for page_num, page in enumerate(doc) if "policy charges and other expenses" in page.get_text("text").lower())]
+                        for row in filtered_policy_charges_rows if len(row) == 1
+                    ]
+                    
+                    if not data_with_metadata:
+                        logger.warning("No valid rows with 1 column for Policy Charges and Other Expenses after filtering")
+                    else:
+                        tables_by_text["Policy Charges and Other Expenses"].extend(data_with_metadata)
+                    
         for keyword in PYMUPDF_KEYWORDS:
             if tables_by_text[keyword]:
                 # Modified: Filter rows with no empty cells and no English words
@@ -773,7 +926,6 @@ async def upload_pdf(file: UploadFile = File(...)):
                         all(not has_english_words(cell) for cell in row[:-2])  # No English words
                     ]
                 if not valid_rows:
-                    logger.warning(f"No valid rows for {keyword} after filtering empty cells and English words")
                     continue
                 
                 # --- WEDNESDAY ---
@@ -789,16 +941,6 @@ async def upload_pdf(file: UploadFile = File(...)):
                 elif num_data_columns == 1:
                     # Use universal header for 1-column tables
                     headers = UNIVERSAL_HEADER_FOR_ONE_COL_TABLES
-                # else:
-                #     # Fallback to existing headers for other cases
-                #     if keyword == "Tabular Detail - Non Guaranteed":
-                #         headers = ["Total Financial Metrics Sum"]
-                #     elif keyword == "Annual Cost Summary":
-                #         headers = [COST_SUMMARY_HEADERS[i] for i in [0, 1, 2, 3, 9, 10, 11]]
-                #     elif keyword == "Policy Charges and Other Expenses":
-                #         headers = [POLICY_CHARGES_HEADERS[i] for i in [0, 1, 2, 3, 7, 8, 9]]
-                #     elif keyword == "Current Illustrated Rate*":
-                #         headers = [CURRENT_ILLUSTRATED_RATE_HEADERS[9]]
 
                 # Create DataFrame with appropriate headers plus metadata columns
                 df = pd.DataFrame(
