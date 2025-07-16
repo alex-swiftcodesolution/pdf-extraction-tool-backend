@@ -194,7 +194,8 @@ def extract_fields(pdf_text: str, filename: str) -> dict:
     related_ror_patterns = {
         "nationwide": r"assumed\s*[:\s]*([\d.]+%)",
         "lsw": r"illustrated\s*rate[:\s]*([\d.]+%)",
-        "mn": r"crediting\s*rate[:\s]*([\d.]+%)"
+        "mn": r"crediting\s*rate[:\s]*([\d.]+%)",
+        "sym": r"initial\s*interest\s*rate[:\s]*([\d.]+%)"
     }
     mn_ror_pattern = r"using\s*([\d.]+)%\s*illustrated\s*crediting\s*rate\s*and\s*current\s*charges"
     nw_ror_pattern = r"(?:indexed\s*interest|assumed|illustrated\s*rate)\s*[\n\r\s]*([\d.]+%)"
