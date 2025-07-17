@@ -31,13 +31,15 @@ logger = logging.getLogger(__name__)
 
 # Define keywords for PyMuPDF-based table extraction
 PYMUPDF_KEYWORDS = [
+    "Ledger\nbasic ledger", # penn 7 cols
+    
     "Tabular Detail - Non Guaranteed",  # NW table identifier
     "Annual Cost Summary",  # NW cost summary table
     "Current Illustrated Rate*",  # LSW illustrated rate table
     "Policy Charges and Other Expenses",  # LSW charges table
     
     "Summary Page: Current Policy Charges",  # sym 7 cols
-    "Details of Policy Charges"  # sym 1 sum col
+    "Details of Policy Charges",  # sym 1 sum col
 ]
 
 # Define keywords for pdfplumber-based table extraction
@@ -139,7 +141,7 @@ DETAILS_OF_POLICY_CHARGES_HEADERS = ["Total Charges"]
 def has_english_words(text: str) -> bool:
     """
     Checks if the text contains English words (non-numeric, non-currency, non-percentage).
-    Allows numbers, currency ($X,XXX.XX), percentages (X.XX%), and empty strings.
+    Allows numbers, currency ($X,XXX.XX), percentages (X.XX%), empty strings, "222", and "Yes".
     
     Args:
         text: String to check for English words.
@@ -147,7 +149,7 @@ def has_english_words(text: str) -> bool:
     Returns:
         bool: True if text contains English words, False otherwise.
     """
-    if not text or text in ("", None, np.nan):
+    if not text or text in ("", None, np.nan, "222", "Yes"):
         return False
     cleaned = re.sub(r'[\$,%]', '', str(text)).strip()
     return not bool(re.match(r'^-?\d*\.?\d*$', cleaned))
@@ -268,6 +270,103 @@ def extract_fields(pdf_text: str, filename: str) -> dict:
 # ------------------------- Table Extraction Functions -------------------------
 
 # Note: The following functions are unchanged as per request to preserve table extraction logic.
+
+def extract_ledger_basic_ledger(page):
+    """
+    Extracts specified columns (1,2,4,5,12,13,14 -> 0-based: 0,1,3,4,11,12,13) from a table
+    on a PDF page containing the keyword 'Ledger\nbasic ledger' using PyMuPDF. Fills empty cells with "222".
+    
+    Args:
+        page: PyMuPDF page object to process
+    
+    Returns:
+        List of tuples with selected columns, keyword, and page number
+    """
+    # Check if the keyword is present
+    keyword = "Ledger\nbasic ledger"
+    page_text = page.get_text().lower()
+    if keyword.lower() not in page_text:
+        return []
+
+    # Define helper function to identify numeric or currency values
+    def is_numeric_or_currency(text):
+        if text in ("", None, np.nan, "222", "Yes", "1"):  # Allow "222", "Yes", and "1" as valid
+            return True
+        return bool(re.match(r'^-?\$?\d{1,3}(,\d{3})*(\.\d+)?$|^-?\d+(\.\d+)?$|^-?\d*\.\d+%?$', text))
+
+    # Extract text spans within y-coordinate range
+    lines = []
+    blocks = page.get_text("dict")["blocks"]
+    for block in blocks:
+        for line in block.get("lines", []):
+            for span in line["spans"]:
+                y = span["bbox"][1]
+                if 100 < y < 750:  # Adjust range as needed
+                    lines.append((y, span["bbox"][0], span["text"].strip()))
+
+    if not lines:
+        return []
+
+    # Sort lines by y-coordinate (rounded to 1 decimal) then x-coordinate
+    lines.sort(key=lambda x: (round(x[0], 1), x[1]))
+
+    # Log raw spans for debugging
+    logger.debug(f"Raw spans for page {page.number + 1}: {lines}")
+
+    # Group lines into rows and fill empty cells with "222"
+    table_data, current_row, last_y = [], [], None
+    expected_cols = 14  # Maximum expected columns based on indices [0,1,3,4,11,12,13]
+    for y, x, text in lines:
+        if last_y is None or abs(y - last_y) < 10:  # Increased threshold for row grouping
+            current_row.append((x, text if text.strip() else "222"))
+        else:
+            current_row.sort()
+            row = [t for _, t in current_row]
+            if len(row) >= 5 and sum(is_numeric_or_currency(t) for t in row) >= 5:  # Require at least 5 valid cells
+                # Fill empty cells with "222"
+                row = [cell if cell != "" else "222" for cell in row]
+                # Pad row to expected_cols with "222"
+                row = row + ["222"] * (expected_cols - len(row))
+                table_data.append(row)
+            current_row = [(x, text if text.strip() else "222")]
+        last_y = y
+
+    if current_row:
+        current_row.sort()
+        row = [t for _, t in current_row]
+        if len(row) >= 5 and sum(is_numeric_or_currency(t) for t in row) >= 5:
+            # Fill empty cells with "222"
+            row = [cell if cell != "" else "222" for cell in row]
+            # Pad row to expected_cols with "222"
+            row = row + ["222"] * (expected_cols - len(row))
+            table_data.append(row)
+
+    if not table_data:
+        return []
+
+    # Log raw table data
+    logger.debug(f"Raw table data for {keyword}: {table_data}")
+
+    # Select specified columns (1,2,4,5,12,13,14 -> 0-based indices: 0,1,3,4,11,12,13)
+    selected_indices = [0, 1, 3, 4, 11, 12, 13]
+    table_data = [
+        [row[i] if i < len(row) else "222" for i in selected_indices]
+        for row in table_data
+    ]
+
+    # Log selected columns
+    logger.debug(f"Table data after selecting columns: {table_data}")
+
+    # Filter rows: allow "222", "Yes", or non-English words
+    table_data = [
+        row for row in table_data
+        if all(cell in ("222", "Yes") or not has_english_words(str(cell)) for cell in row)
+    ]
+
+    # Log filtered table data
+    logger.debug(f"Table data after filtering: {table_data}")
+
+    return [tuple(row + [keyword, page.number + 1]) for row in table_data]
 
 def extract_summary_page_current_policy_charges(page):
     """
@@ -1032,6 +1131,11 @@ async def upload_pdf(file: UploadFile = File(...)):
                 policy_charges_rows = []
                 for page_num, page in enumerate(doc):
                     text = page.get_text("text").lower()
+                    
+                    if "ledger\nbasic ledger" in text:
+                        data = extract_ledger_basic_ledger(page)
+                        if data:
+                            tables_by_text["Ledger\nbasic ledger"].extend(data)
 
                     if "annual cost summary" in text:
                         data = extract_annual_cost_summary(page)
@@ -1062,7 +1166,7 @@ async def upload_pdf(file: UploadFile = File(...)):
                         data = extract_details_of_policy_charges(page)
                         if data:
                             tables_by_text["Details of Policy Charges"].extend(data)
-
+                            
                 # Process Policy Charges and Other Expenses rows
                 if policy_charges_rows:
                     filtered_policy_charges_rows = [row for i, row in enumerate(policy_charges_rows, 1) if i % 6 != 0]
@@ -1080,8 +1184,19 @@ async def upload_pdf(file: UploadFile = File(...)):
             if tables_by_text[keyword]:
                 valid_rows = [
                     row for row in tables_by_text[keyword]
-                    if all(cell not in ("", None, np.nan) for cell in row[:-2]) and
-                    (keyword == "Policy Charges and Other Expenses" or all(not has_english_words(cell) for cell in row[:-2]))
+                    if (
+                        keyword == "Ledger\nbasic ledger" and
+                        len(row) == 9 and  # Ensure 7 data columns + 2 metadata
+                        all(cell in ("222", "Yes") or not has_english_words(str(cell)) for cell in row[:-2])
+                    ) or (
+                        keyword != "Ledger\nbasic ledger" and
+                        keyword != "Policy Charges and Other Expenses" and
+                        all(cell not in ("", None, np.nan) for cell in row[:-2]) and
+                        all(not has_english_words(str(cell)) for cell in row[:-2])
+                    ) or (
+                        keyword == "Policy Charges and Other Expenses" and
+                        all(cell not in ("", None, np.nan) for cell in row[:-2])
+                    )
                 ]
                 if not valid_rows:
                     continue
@@ -1096,7 +1211,10 @@ async def upload_pdf(file: UploadFile = File(...)):
                 )
 
                 if headers:
+                    logger.info(f"Valid rows for {keyword} before DataFrame: {valid_rows}")
                     df = pd.DataFrame(valid_rows, columns=headers + ["Source_Text", "Page_Number"])
+                    df = df.fillna("")
+                    logger.info(f"DataFrame for {keyword}:\n{df.to_string(index=False)}")
                     if not df.empty:
                         logger.info(f"Extracted Table: {keyword} (Combined)\n{df.to_string(index=False)}")
                         results.append({
