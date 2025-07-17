@@ -40,8 +40,6 @@ PYMUPDF_KEYWORDS = [
     
     "Summary Page: Current Policy Charges",  # sym 7 cols
     "Details of Policy Charges",  # sym 1 sum col
-    
-    "non-guranteed assumed\ncurrent charges", # na 7 cols
 ]
 
 # Define keywords for pdfplumber-based table extraction
@@ -269,91 +267,6 @@ def extract_fields(pdf_text: str, filename: str) -> dict:
 # ------------------------- Table Extraction Functions -------------------------
 
 # Note: The following functions are unchanged as per request to preserve table extraction logic.
-
-def extract_non_guaranteed_assumed_current_charges(page):
-    """
-    Extracts specified columns (0,1,2,3,11,12,13) from a table on a PDF page containing
-    the keyword 'non-guranteed assumed\ncurrent charges' using PyMuPDF. Fills empty cells with "222".
-    
-    Args:
-        page: PyMuPDF page object to process
-    
-    Returns:
-        List of tuples with selected columns, keyword, and page number
-    """
-    # Check if the keyword is present
-    keyword = "non-guranteed assumed\ncurrent charges"
-    page_text = page.get_text().lower()
-    if keyword.lower() not in page_text:
-        return []
-
-    # Define helper function to identify numeric or currency values
-    def is_numeric_or_currency(text):
-        if text in ("", None, np.nan, "222", "Yes", "1"):
-            return True
-        return bool(re.match(r'^-?\$?\d{1,3}(,\d{3})*(\.\d+)?$|^-?\d+(\.\d+)?$|^-?\d*\.\d+%?$', text))
-
-    # Extract text spans within y-coordinate range
-    lines = []
-    blocks = page.get_text("dict")["blocks"]
-    for block in blocks:
-        for line in block.get("lines", []):
-            for span in line["spans"]:
-                y = span["bbox"][1]
-                if 100 < y < 750:  # Adjust range as needed
-                    lines.append((y, span["bbox"][0], span["text"].strip()))
-
-    if not lines:
-        return []
-
-    # Sort lines by y-coordinate (rounded to 1 decimal) then x-coordinate
-    lines.sort(key=lambda x: (round(x[0], 1), x[1]))
-
-    # Group lines into rows and fill empty cells with "222"
-    table_data, current_row, last_y = [], [], None
-    expected_cols = 14  # Maximum expected columns based on indices [0,1,2,3,11,12,13]
-    for y, x, text in lines:
-        if last_y is None or abs(y - last_y) < 10:  # Increased threshold for row grouping
-            current_row.append((x, text if text.strip() else "222"))
-        else:
-            current_row.sort()
-            row = [t for _, t in current_row]
-            if len(row) >= 5 and sum(is_numeric_or_currency(t) for t in row) >= 5:  # Require at least 5 valid cells
-                # Fill empty cells with "222"
-                row = [cell if cell != "" else "222" for cell in row]
-                # Pad row to expected_cols with "222"
-                row = row + ["222"] * (expected_cols - len(row))
-                table_data.append(row)
-            current_row = [(x, text if text.strip() else "222")]
-        last_y = y
-
-    if current_row:
-        current_row.sort()
-        row = [t for _, t in current_row]
-        if len(row) >= 5 and sum(is_numeric_or_currency(t) for t in row) >= 5:
-            # Fill empty cells with "222"
-            row = [cell if cell != "" else "222" for cell in row]
-            # Pad row to expected_cols with "222"
-            row = row + ["222"] * (expected_cols - len(row))
-            table_data.append(row)
-
-    if not table_data:
-        return []
-
-    # Select specified columns (0,1,2,3,11,12,13)
-    selected_indices = [0, 1, 2, 3, 11, 12, 13]
-    table_data = [
-        [row[i] if i < len(row) else "222" for i in selected_indices]
-        for row in table_data
-    ]
-
-    # Filter rows: allow "222", "Yes", or non-English words
-    table_data = [
-        row for row in table_data
-        if all(cell in ("222", "Yes") or not has_english_words(str(cell)) for cell in row)
-    ]
-
-    return [tuple(row + [keyword, page.number + 1]) for row in table_data]
 
 def extract_ledger_basic_ledger(page):
     """
@@ -1250,11 +1163,6 @@ async def upload_pdf(file: UploadFile = File(...)):
                         data = extract_details_of_policy_charges(page)
                         if data:
                             tables_by_text["Details of Policy Charges"].extend(data)
-                            
-                    if "non-guranteed assumed\ncurrent charges" in text:
-                        data = extract_non_guaranteed_assumed_current_charges(page)
-                        if data:
-                            tables_by_text["non-guranteed assumed\ncurrent charges"].extend(data)
                             
                 # Process Policy Charges and Other Expenses rows
                 if policy_charges_rows:
