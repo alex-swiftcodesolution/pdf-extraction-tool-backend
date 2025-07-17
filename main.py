@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 
 # Define keywords for PyMuPDF-based table extraction
 PYMUPDF_KEYWORDS = [
-    "Ledger\nbasic ledger", # penn 7 cols
+    "Ledger\nbasic ledger", # penn 7 cols, penn 1 col covered from below
     
     "Tabular Detail - Non Guaranteed",  # NW table identifier
     "Annual Cost Summary",  # NW cost summary table
@@ -82,14 +82,12 @@ TABULAR_HEADERS = [
     "accumulated value (current)", "net surrender value (current)", "net death benefit (current)",
     "accumulated value (guaranteed)", "net surrender value (guaranteed)", "net death benefit (guaranteed)"
 ]
-
 COST_SUMMARY_HEADERS = [
     "Yr", "Age", "Premium Outlay", "Base COI", "Policy Expense",
     "Per 1000 (Base)", "Total Charges", "Loan Charges", "Loans & Partial Surrenders",
     "Index Segment", "Investment Gain/Loss", "Net Policy Value EOY",
     "Net Death Benefit EOY"
 ]
-
 ILLUSTRATED_VALUES_HEADERS = [
     "Year", "Age", "Premium Outlay", "Net Income",
     "[Guaranteed Values][2.00% crediting rate and maximum charges]Surrender Value",
@@ -101,7 +99,6 @@ ILLUSTRATED_VALUES_HEADERS = [
     "[Non-Guaranteed Values][6.59% illustrated crediting rate and current charges]Surrender Value",
     "[Non-Guaranteed Values][6.59% illustrated crediting rate and current charges]Death Benfit"
 ]
-
 POLICY_CURRENT_CHARGES_SUMMARY_HEADERS = [
     "Year", "Age", "Premium Outlay", "Premium Charge",
     "Cost of Insurance Charge", "Policy Issue Charge",
@@ -112,7 +109,6 @@ POLICY_CURRENT_CHARGES_SUMMARY_HEADERS = [
     "[Non-Guaranteed Values][Using illustrated crediting rates and current charges]Surrender Value",
     "[Non-Guaranteed Values][Using illustrated crediting rates and current charges]Death Benfit"
 ]
-
 POLICY_CHARGES_HEADERS = [
     "Policy Year", "Age", "Premium Outlay", "Premium Expense Charge",
     "cost of insurance", "cost of other benefits", "policy fee",
@@ -120,7 +116,6 @@ POLICY_CHARGES_HEADERS = [
     "additional bonus", "total credits", "accumulated value", "Surrender charges", "cash surrender value",
     "net death benefit", "ex"
 ]
-
 CURRENT_ILLUSTRATED_RATE_HEADERS = [
     "Policy year", "Age", "Premium Outlay", "Planned annual income", "Planned annual loan",
     "Accumulated loan amount", "Weighted average interest rate", "Accumulated value",
@@ -134,7 +129,7 @@ SUMMARY_PAGE_CURRENT_POLICY_CHARGES_HEADERS = [
 ]
 
 # sym
-DETAILS_OF_POLICY_CHARGES_HEADERS = ["Total Charges"]
+DETAILS_OF_POLICY_CHARGES_HEADERS = ["Charges"]
 
 # ------------------------- Helper Functions -------------------------
 
