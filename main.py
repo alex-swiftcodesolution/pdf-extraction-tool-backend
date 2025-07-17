@@ -40,6 +40,8 @@ PYMUPDF_KEYWORDS = [
     
     "Summary Page: Current Policy Charges",  # sym 7 cols
     "Details of Policy Charges",  # sym 1 sum col
+    
+    "Death Benefit Option: 2-Increasing", # na 7 cols
 ]
 
 # Define keywords for pdfplumber-based table extraction
@@ -267,6 +269,80 @@ def extract_fields(pdf_text: str, filename: str) -> dict:
 # ------------------------- Table Extraction Functions -------------------------
 
 # Note: The following functions are unchanged as per request to preserve table extraction logic.
+
+def extract_death_benefit_option_increasing(page):
+    """
+    Extracts columns 0 to 7 from a table on a PDF page containing the keyword
+    'Death Benefit Option: 2-Increasing' using PyMuPDF. Filters rows with no English words.
+    
+    Args:
+        page: PyMuPDF page object to process
+    
+    Returns:
+        List of tuples with selected columns, keyword, and page number
+    """
+    # Check if the keyword is present
+    keyword = "Death Benefit Option: 2-Increasing"
+    page_text = page.get_text().lower()
+    if keyword.lower() not in page_text:
+        return []
+
+    # Define helper function to identify numeric or currency values
+    def is_numeric_or_currency(text):
+        return bool(re.match(r'^-?\$?\d{1,3}(,\d{3})*(\.\d+)?$|^-?\d+(\.\d+)?$|^-?\d*\.\d+%?$', text))
+
+    # Extract text spans within y-coordinate range
+    lines = []
+    blocks = page.get_text("dict")["blocks"]
+    for block in blocks:
+        for line in block.get("lines", []):
+            for span in line["spans"]:
+                y = span["bbox"][1]
+                if 100 < y < 750:  # Adjust range as needed
+                    lines.append((y, span["bbox"][0], span["text"].strip()))
+
+    if not lines:
+        return []
+
+    # Sort lines by y-coordinate (rounded to 1 decimal) then x-coordinate
+    lines.sort(key=lambda x: (round(x[0], 1), x[1]))
+
+    # Group lines into rows
+    table_data, current_row, last_y = [], [], None
+    for y, x, text in lines:
+        if last_y is None or abs(y - last_y) < 6:
+            current_row.append((x, text))
+        else:
+            current_row.sort()
+            row = [t for _, t in current_row]
+            if sum(is_numeric_or_currency(t) for t in row) >= 5:  # Require at least 5 numeric columns
+                table_data.append(row)
+            current_row = [(x, text)]
+        last_y = y
+
+    if current_row:
+        current_row.sort()
+        row = [t for _, t in current_row]
+        if sum(is_numeric_or_currency(t) for t in row) >= 5:
+            table_data.append(row)
+
+    if not table_data:
+        return []
+
+    # Select columns 0 to 7 (0-based indices: 0,1,2,3,4,5,6,7)
+    selected_indices = [0, 1, 2, 3, 4, 5, 6]
+    table_data = [
+        [row[i] if i < len(row) else "" for i in selected_indices]
+        for row in table_data
+    ]
+
+    # Filter rows: no English words, but allow empty cells
+    table_data = [
+        row for row in table_data
+        if all(not has_english_words(cell) for cell in row if cell not in ("", None, np.nan))
+    ]
+
+    return [tuple(row + [keyword, page.number + 1]) for row in table_data]
 
 def extract_ledger_basic_ledger(page):
     """
@@ -1164,6 +1240,11 @@ async def upload_pdf(file: UploadFile = File(...)):
                         if data:
                             tables_by_text["Details of Policy Charges"].extend(data)
                             
+                    if "death benefit option: 2-increasing" in text:
+                        data = extract_death_benefit_option_increasing(page)
+                        if data:
+                            tables_by_text["Death Benefit Option: 2-Increasing"].extend(data)
+                            
                 # Process Policy Charges and Other Expenses rows
                 if policy_charges_rows:
                     filtered_policy_charges_rows = [row for i, row in enumerate(policy_charges_rows, 1) if i % 6 != 0]
@@ -1203,6 +1284,7 @@ async def upload_pdf(file: UploadFile = File(...)):
                     UNIVERSAL_HEADER_FOR_SEVEN_COL_TABLES if num_data_columns == 7
                     else UNIVERSAL_HEADER_FOR_ONE_COL_TABLES if num_data_columns == 1
                     else SUMMARY_PAGE_CURRENT_POLICY_CHARGES_HEADERS if keyword == "Summary Page: Current Policy Charges" and num_data_columns == 7
+                    else UNIVERSAL_HEADER_FOR_SEVEN_COL_TABLES if keyword == "Death Benefit Option: 2-Increasing" and num_data_columns == 7
                     else DETAILS_OF_POLICY_CHARGES_HEADERS if keyword == "Details of Policy Charges" and num_data_columns == 1
                     else []
                 )
