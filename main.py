@@ -273,7 +273,8 @@ def extract_fields(pdf_text: str, filename: str) -> dict:
 def extract_death_benefit_option_increasing(page):
     """
     Extracts columns 0 to 7 from a table on a PDF page containing the keyword
-    'Death Benefit Option: 2-Increasing' using PyMuPDF. Filters rows with no English words.
+    'Death Benefit Option: 2-Increasing' using PyMuPDF. Filters rows to include only those
+    with at least 5 numeric or currency-like values.
     
     Args:
         page: PyMuPDF page object to process
@@ -285,11 +286,16 @@ def extract_death_benefit_option_increasing(page):
     keyword = "Death Benefit Option: 2-Increasing"
     page_text = page.get_text().lower()
     if keyword.lower() not in page_text:
+        logger.info(f"Keyword '{keyword}' not detected on page {page.number + 1}")
         return []
+    else:
+        logger.info(f"Keyword '{keyword}' detected on page {page.number + 1}")
 
     # Define helper function to identify numeric or currency values
     def is_numeric_or_currency(text):
-        return bool(re.match(r'^-?\$?\d{1,3}(,\d{3})*(\.\d+)?$|^-?\d+(\.\d+)?$|^-?\d*\.\d+%?$', text))
+        if text in ("", None, np.nan, "P", "FL"):  # Allow "P" and "FL" for Net Income column
+            return True
+        return bool(re.match(r'^-?\$?\d{1,3}(,\d{3})*(\.\d+)?$|^-?\d+(\.\d+)?$|^-?\d*\.\d+%?$|^-?\d{1,3}(,\d{3})*/\d{1,3}(,\d{3})*$', text))
 
     # Extract text spans within y-coordinate range
     lines = []
@@ -302,6 +308,7 @@ def extract_death_benefit_option_increasing(page):
                     lines.append((y, span["bbox"][0], span["text"].strip()))
 
     if not lines:
+        logger.info(f"No text spans found within y-coordinate range on page {page.number + 1}")
         return []
 
     # Sort lines by y-coordinate (rounded to 1 decimal) then x-coordinate
@@ -315,7 +322,8 @@ def extract_death_benefit_option_increasing(page):
         else:
             current_row.sort()
             row = [t for _, t in current_row]
-            if sum(is_numeric_or_currency(t) for t in row) >= 5:  # Require at least 5 numeric columns
+            # Filter rows with at least 5 numeric or currency-like values
+            if len(row) >= 7 and sum(is_numeric_or_currency(t) for t in row) >= 5:
                 table_data.append(row)
             current_row = [(x, text)]
         last_y = y
@@ -323,25 +331,21 @@ def extract_death_benefit_option_increasing(page):
     if current_row:
         current_row.sort()
         row = [t for _, t in current_row]
-        if sum(is_numeric_or_currency(t) for t in row) >= 5:
+        if len(row) >= 7 and sum(is_numeric_or_currency(t) for t in row) >= 5:
             table_data.append(row)
 
     if not table_data:
+        logger.info(f"No table data extracted on page {page.number + 1}")
         return []
 
     # Select columns 0 to 7 (0-based indices: 0,1,2,3,4,5,6,7)
-    selected_indices = [0, 1, 2, 3, 4, 5, 6]
+    selected_indices = [0, 1, 2, 3, 10, 11, 12]
     table_data = [
         [row[i] if i < len(row) else "" for i in selected_indices]
         for row in table_data
     ]
 
-    # Filter rows: no English words, but allow empty cells
-    table_data = [
-        row for row in table_data
-        if all(not has_english_words(cell) for cell in row if cell not in ("", None, np.nan))
-    ]
-
+    logger.info(f"Extracted {len(table_data)} rows for '{keyword}' on page {page.number + 1}")
     return [tuple(row + [keyword, page.number + 1]) for row in table_data]
 
 def extract_ledger_basic_ledger(page):
@@ -1259,13 +1263,17 @@ async def upload_pdf(file: UploadFile = File(...)):
 
         # Convert PyMuPDF results to DataFrames
         for keyword in PYMUPDF_KEYWORDS:
+            
             if tables_by_text[keyword]:
-                valid_rows = [
+                if keyword == "Death Benefit Option: 2-Increasing":
+                    valid_rows = tables_by_text[keyword]
+                else:
+                    valid_rows = [
                     row for row in tables_by_text[keyword]
                     if (
                         keyword == "Ledger\nbasic ledger" and
                         len(row) == 9 and  # Ensure 7 data columns + 2 metadata
-                        all(cell in ("222", "Yes") or not has_english_words(str(cell)) for cell in row[:-2])
+                        all(cell in ("222") or not has_english_words(str(cell)) for cell in row[:-2])
                     ) or (
                         keyword != "Ledger\nbasic ledger" and
                         keyword != "Policy Charges and Other Expenses" and
