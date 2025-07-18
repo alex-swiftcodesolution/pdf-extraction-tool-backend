@@ -197,6 +197,7 @@ def extract_fields(pdf_text: str, filename: str) -> dict:
         "mn": r"crediting\s*rate[:\s]*([\d.]+%)",
         "sym": r"initial\s*interest\s*rate[:\s]*([\d.]+%)",
         "na": r"Non-Guaranteed\s*Assumed\s*Current\s*Charges\s*[\s\S]*?(?:Index\s*Credits[:\s]*[\d.]+%[\s*]?[\s\S]*?){1}Index\s*Credits[:\s]*([\d.]+%[\s*]?)",
+        "penn": r"Non-Guaranteed\s+Illustrated\s+Scenario(?:\s*[\r\n]+\s*[^\r\n]*){1,4}\s*(\d+\.\d+%)",
         
     }
     mn_ror_pattern = r"using\s*([\d.]+)%\s*illustrated\s*crediting\s*rate\s*and\s*current\s*charges"
