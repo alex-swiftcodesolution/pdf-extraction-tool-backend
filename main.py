@@ -42,6 +42,7 @@ PYMUPDF_KEYWORDS = [
     "Details of Policy Charges",  # sym 1 sum col
     
     "Death Benefit Option: 2-Increasing", # na 7 cols
+    "-Loan\nBalance", # na 1 sum col
 ]
 
 # Define keywords for pdfplumber-based table extraction
@@ -347,6 +348,118 @@ def extract_death_benefit_option_increasing(page):
 
     logger.info(f"Extracted {len(table_data)} rows for '{keyword}' on page {page.number + 1}")
     return [tuple(row + [keyword, page.number + 1]) for row in table_data]
+
+def extract_loan_balance(page):
+    """
+    Extracts the sum of columns 3, 4, and 5 (0-based indices) from a table on a PDF page 
+    containing the keyword '-Loan\nBalance' anywhere in the page text using PyMuPDF. 
+    Returns a single-column table with summed values, keyword, and page number. 
+    Logs raw values, their sums, and row data for verification.
+    
+    Args:
+        page: PyMuPDF page object to process
+    
+    Returns:
+        List of tuples with summed value, keyword, and page number
+    """
+    # Check if the keyword is present in the page text
+    keyword = "-Loan\nBalance"
+    page_text = page.get_text("text").lower()
+    if not re.search(r"-loan\s*balance|-loan\nbalance|-loan", page_text, re.IGNORECASE):
+        logger.info(f"Keyword '{keyword}' not detected on page {page.number + 1}. Raw page text sample: {page_text[:500]}")
+        return []
+
+    logger.info(f"Keyword '{keyword}' detected on page {page.number + 1}")
+
+    # Define helper function to identify numeric or currency values for summing
+    def is_numeric_or_currency(text):
+        return bool(re.match(r'^-?\$?\d{1,3}(,\d{3})*(\.\d+)?$|^-?\d+(\.\d+)?$|^-?\d*\.\d+%?$', text))
+
+    # Extract text spans within y-coordinate range
+    lines = []
+    blocks = page.get_text("dict")["blocks"]
+    for block in blocks:
+        for line in block.get("lines", []):
+            # Combine spans in the same line to handle split text
+            spans = line["spans"]
+            combined_text = " ".join(span["text"].strip() for span in spans)
+            y = line["bbox"][1]
+            x = line["bbox"][0]
+            if 100 < y < 750:  # Adjust range as needed
+                lines.append((y, x, combined_text))
+
+    if not lines:
+        logger.info(f"No text spans found within y-coordinate range on page {page.number + 1}")
+        return []
+
+    # Sort lines by y-coordinate (rounded to 1 decimal) then x-coordinate
+    lines.sort(key=lambda x: (round(x[0], 1), x[1]))
+
+    # Log raw spans for debugging
+    logger.info(f"Raw spans on page {page.number + 1}: {[(y, x, text) for y, x, text in lines[:10]]}")
+
+    # Group lines into rows
+    table_data, current_row, last_y = [], [], None
+    for y, x, text in lines:
+        if last_y is None or abs(y - last_y) < 10:  # Threshold for row grouping
+            current_row.append((x, text))
+        else:
+            current_row.sort()
+            row = [t for _, t in current_row]
+            # Exclude non-data rows (e.g., footers, metadata)
+            if not any(phrase in " ".join(row).lower() for phrase in ["page of", "software version", "supplemental illustration"]):
+                table_data.append(row)
+            logger.info(f"Processed row on page {page.number + 1}: {row}")
+            current_row = [(x, text)]
+        last_y = y
+
+    if current_row:
+        current_row.sort()
+        row = [t for _, t in current_row]
+        if not any(phrase in " ".join(row).lower() for phrase in ["page of", "software version", "supplemental illustration"]):
+            table_data.append(row)
+        logger.info(f"Processed row on page {page.number + 1}: {row}")
+
+    if not table_data:
+        logger.info(f"No table data extracted on page {page.number + 1}")
+        return []
+
+    # Log raw table data
+    logger.info(f"Raw table data for '{keyword}' on page {page.number + 1}: {table_data}")
+
+    # Sum columns 3, 4, 5 (0-based indices: 2, 3, 4)
+    sum_indices = [3, 4, 5]
+    def safe_float(val):
+        try:
+            val = str(val).strip()
+            if val.startswith('(') and val.endswith(')'):
+                val = '-' + val[1:-1]
+            val = val.replace('$', '').replace(',', '')
+            return float(val)
+        except (ValueError, AttributeError):
+            return 0.0
+
+    summed_values = []
+    for row in table_data:
+        # Ensure row has enough columns to sum
+        if len(row) >= 5:  # Need at least 5 columns to access indices 2, 3, 4
+            raw_values = [row[i] if i < len(row) else "" for i in sum_indices]
+            numeric_values = [safe_float(row[i]) for i in sum_indices if i < len(row)]
+            sum_value = abs(sum(numeric_values))
+            if sum_value not in (0.0, None, np.nan):
+                logger.info(f"Row {row}: Raw values (columns 3,4,5): {raw_values} -> Sum: {sum_value}")
+                summed_values.append(sum_value)
+            else:
+                logger.info(f"Excluded row due to invalid sum on page {page.number + 1}: {row}")
+        else:
+            logger.info(f"Excluded row due to insufficient columns on page {page.number + 1}: {row}")
+
+    if not summed_values:
+        logger.info(f"No valid summed values extracted for '{keyword}' on page {page.number + 1}")
+        return []
+
+    logger.info(f"Extracted {len(summed_values)} summed values for '{keyword}' on page {page.number + 1}")
+    return [(val, keyword, page.number + 1) for val in summed_values]
 
 def extract_ledger_basic_ledger(page):
     """
@@ -1249,6 +1362,11 @@ async def upload_pdf(file: UploadFile = File(...)):
                         if data:
                             tables_by_text["Death Benefit Option: 2-Increasing"].extend(data)
                             
+                    if re.search(r"-loan\s*balance|-loan\nbalance", text, re.IGNORECASE):
+                        data = extract_loan_balance(page)
+                        if data:
+                            tables_by_text["-Loan\nBalance"].extend(data)
+                            
                 # Process Policy Charges and Other Expenses rows
                 if policy_charges_rows:
                     filtered_policy_charges_rows = [row for i, row in enumerate(policy_charges_rows, 1) if i % 6 != 0]
@@ -1277,12 +1395,13 @@ async def upload_pdf(file: UploadFile = File(...)):
                     ) or (
                         keyword != "Ledger\nbasic ledger" and
                         keyword != "Policy Charges and Other Expenses" and
+                        # keyword != "-Loan\nBalance" and
                         all(cell not in ("", None, np.nan) for cell in row[:-2]) and
                         all(not has_english_words(str(cell)) for cell in row[:-2])
                     ) or (
                         keyword == "Policy Charges and Other Expenses" and
                         all(cell not in ("", None, np.nan) for cell in row[:-2])
-                    )
+                    ) 
                 ]
                 if not valid_rows:
                     continue
@@ -1294,6 +1413,7 @@ async def upload_pdf(file: UploadFile = File(...)):
                     else SUMMARY_PAGE_CURRENT_POLICY_CHARGES_HEADERS if keyword == "Summary Page: Current Policy Charges" and num_data_columns == 7
                     else UNIVERSAL_HEADER_FOR_SEVEN_COL_TABLES if keyword == "Death Benefit Option: 2-Increasing" and num_data_columns == 7
                     else DETAILS_OF_POLICY_CHARGES_HEADERS if keyword == "Details of Policy Charges" and num_data_columns == 1
+                    else UNIVERSAL_HEADER_FOR_ONE_COL_TABLES if keyword == "-Loan\nBalance" and num_data_columns == 1
                     else []
                 )
 
