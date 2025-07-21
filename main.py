@@ -1451,6 +1451,7 @@ async def upload_pdf(file: UploadFile = File(...)):
 
         # Prepare response with fields and tables
         response = {
+            "fileName": file.filename,
             "fields": extracted_fields,
             "tables": jsonable_encoder(results)
         }
