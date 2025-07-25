@@ -164,10 +164,115 @@ def extract_filename(filename: str) -> str:
     """
     return filename
 
+# def extract_fields(pdf_text: str, filename: str) -> dict:
+#     """
+#     Extracts specific fields (e.g., illustration_date, insured_name) from PDF text.
+#     For ALZ files, extracts assumed_ror from the line below 'current scenario indexed interest rate'.
+    
+#     Args:
+#         pdf_text: Full text extracted from the PDF.
+#         filename: Name of the uploaded PDF file.
+    
+#     Returns:
+#         dict: Dictionary containing extracted fields or None for missing fields.
+#     """
+#     fields = {
+#         "illustration_date": None,
+#         "insured_name": None,
+#         "initial_death_benefit": None,
+#         "assumed_ror": None,
+#         "minimum_initial_pmt": None
+#     }
+    
+#     pages = pdf_text.split("page ")[1:]
+#     page_1_text = pages[0].lower() if pages else ""
+#     text = pdf_text.lower()
+#     filename = filename.lower()
+
+#     # Define patterns for assumed_ror based on filename keywords
+#     default_ror_pattern = r"assumed\s*ror[:\s]*([\d.]+%)"
+#     related_ror_patterns = {
+#         "nationwide": r"assumed\s*[:\s]*([\d.]+%)",
+#         "lsw": r"illustrated\s*rate[:\s]*([\d.]+%)",
+#         "mn": r"crediting\s*rate[:\s]*([\d.]+%)",
+#         "sym": r"initial\s*interest\s*rate[:\s]*([\d.]+%)",
+#         "na": r"Non-Guaranteed\s*Assumed\s*Current\s*Charges\s*[\s\S]*?(?:Index\s*Credits[:\s]*[\d.]+%[\s*]?[\s\S]*?){1}Index\s*Credits[:\s]*([\d.]+%[\s*]?)",
+#         "penn": r"Non-Guaranteed\s+Illustrated\s+Scenario(?:\s*[\r\n]+\s*[^\r\n]*){1,4}\s*(\d+\.\d+%)",
+        
+#     }
+#     mn_ror_pattern = r"using\s*([\d.]+)%\s*illustrated\s*crediting\s*rate\s*and\s*current\s*charges"
+#     nw_ror_pattern = r"(?:indexed\s*interest|assumed|illustrated\s*rate)\s*[\n\r\s]*([\d.]+%)"
+
+#     # Handle assumed_ror for files
+#     if "alz" in filename:
+#         lines = pdf_text.splitlines()
+#         target_text = "Indexed interest rates"
+#         for i, line in enumerate(lines):
+#             if target_text.lower() in line.lower():
+#                 if i + 1 < len(lines):
+#                     next_line = lines[i + 1].strip()
+#                     match = re.search(r"(\d+\.?\d*%)", next_line)
+#                     if match:
+#                         fields["assumed_ror"] = match.group(1)
+#                         break
+#     elif "mnl" in filename:
+#         ror_match = re.search(mn_ror_pattern, text, re.IGNORECASE | re.DOTALL)
+#         if ror_match:
+#             fields["assumed_ror"] = f"{ror_match.group(1)}%"
+#         else:
+#             ror_match = re.search(related_ror_patterns["mn"], text, re.IGNORECASE)
+#             if ror_match:
+#                 fields["assumed_ror"] = ror_match.group(1).strip()
+#     elif "nationwide" in filename:
+#         ror_match = re.search(nw_ror_pattern, text, re.IGNORECASE | re.DOTALL)
+#         if ror_match:
+#             fields["assumed_ror"] = ror_match.group(1).strip()
+#             logger.debug(f"Nationwide assumed_ror matched: {ror_match.group(1)}")
+#         else:
+#             ror_match = re.search(r"assumed\s*[:\s]*([\d.]+%)", text, re.IGNORECASE)
+#             if ror_match:
+#                 fields["assumed_ror"] = ror_match.group(1).strip()
+#                 logger.debug(f"Nationwide fallback assumed_ror: {ror_match.group(1)}")
+#             else:
+#                 logger.debug("Nationwide assumed_ror not found")
+#     else:
+#         selected_ror_pattern = default_ror_pattern
+#         for keyword, pattern in related_ror_patterns.items():
+#             if keyword in filename:
+#                 selected_ror_pattern = pattern
+#                 break
+#         match = re.search(selected_ror_pattern, text, re.IGNORECASE)
+#         if match:
+#             fields["assumed_ror"] = match.group(1).strip()
+
+#     # Define patterns for other fields
+#     patterns = {
+#         "illustration_date": (
+#             r"(?:\billustration\s*date\b|prepared\s*on\b|issued\s*on\b|date\b)[:\s]*"
+#             r"(\d{1,2}[/-]\d{1,2}[/-]\d{2,4}"  # MM/DD/YYYY or MM-DD-YYYY
+#             r"|\w+\s+\d{1,2},\s+\d{4}"         # Month DD, YYYY
+#             r"|\d{1,2}\s+\w+\s+\d{4}"          # DD Month YYYY
+#             r"|\d{4}-\d{2}-\d{2}"              # YYYY-MM-DD
+#             r"|\d{1,2}/\d{1,2}/\d{2})"         # MM/DD/YY
+#         ),
+#         "insured_name": r"(?:prepared\s*for|for)\s*:?\s*\n*\s*([A-Za-z][^\n]{2,50})(?=\n|$)",
+#         "initial_death_benefit": r"initial\s*death\s*benefit[:\s]*[\$]?([\d,]+\.?\d*)",
+#         "minimum_initial_pmt": r"minimum\s*initial\s*pmt[:\s]*[\$]?([\d,]+\.?\d*)"
+#     }
+
+#     # Extract fields using regex patterns
+#     for field, pattern in patterns.items():
+#         match = re.search(pattern, text, re.IGNORECASE)
+#         if match:
+#             fields[field] = match.group(1).strip()
+
+#     return fields
+
 def extract_fields(pdf_text: str, filename: str) -> dict:
     """
     Extracts specific fields (e.g., illustration_date, insured_name) from PDF text.
     For ALZ files, extracts assumed_ror from the line below 'current scenario indexed interest rate'.
+    Uses filename and content-based keyphrases to select regex patterns for assumed_ror.
     
     Args:
         pdf_text: Full text extracted from the PDF.
@@ -189,22 +294,46 @@ def extract_fields(pdf_text: str, filename: str) -> dict:
     text = pdf_text.lower()
     filename = filename.lower()
 
-    # Define patterns for assumed_ror based on filename keywords
+    # Define keyphrases for content-based provider detection
+    keyphrase_map = {
+        "alz": "Allianz Life Insurance Company of North America",
+        "lsw": "National Life Group",
+        "mnl": "Minnesota Life Insurance Company",
+        "nationwide": "Nationwide Life and Annuity Insurance Company",
+        "sym": "Symetra",
+        "penn": "The Penn Insurance and Annuity Company",
+        "na": "North American Company for Life and Health Insurance"
+    }
+
+    # Define patterns for assumed_ror based on filename/provider keywords
     default_ror_pattern = r"assumed\s*ror[:\s]*([\d.]+%)"
     related_ror_patterns = {
         "nationwide": r"assumed\s*[:\s]*([\d.]+%)",
         "lsw": r"illustrated\s*rate[:\s]*([\d.]+%)",
-        "mn": r"crediting\s*rate[:\s]*([\d.]+%)",
+        "mnl": r"crediting\s*rate[:\s]*([\d.]+%)",
         "sym": r"initial\s*interest\s*rate[:\s]*([\d.]+%)",
         "na": r"Non-Guaranteed\s*Assumed\s*Current\s*Charges\s*[\s\S]*?(?:Index\s*Credits[:\s]*[\d.]+%[\s*]?[\s\S]*?){1}Index\s*Credits[:\s]*([\d.]+%[\s*]?)",
         "penn": r"Non-Guaranteed\s+Illustrated\s+Scenario(?:\s*[\r\n]+\s*[^\r\n]*){1,4}\s*(\d+\.\d+%)",
-        
     }
     mn_ror_pattern = r"using\s*([\d.]+)%\s*illustrated\s*crediting\s*rate\s*and\s*current\s*charges"
     nw_ror_pattern = r"(?:indexed\s*interest|assumed|illustrated\s*rate)\s*[\n\r\s]*([\d.]+%)"
 
-    # Handle assumed_ror for files
-    if "alz" in filename:
+    # Step 1: Detect provider from filename
+    selected_keyword = None
+    for keyword in keyphrase_map.keys():
+        if keyword in filename:
+            selected_keyword = keyword
+            break
+
+    # Step 2: Validate/override with content-based keyphrase detection
+    for keyword, phrase in keyphrase_map.items():
+        if re.search(re.escape(phrase), text, re.IGNORECASE):
+            selected_keyword = keyword
+            logging.debug(f"Content-based match found: {phrase} -> {keyword}")
+            break
+
+    # Handle assumed_ror extraction
+    if selected_keyword == "alz":
         lines = pdf_text.splitlines()
         target_text = "Indexed interest rates"
         for i, line in enumerate(lines):
@@ -214,36 +343,35 @@ def extract_fields(pdf_text: str, filename: str) -> dict:
                     match = re.search(r"(\d+\.?\d*%)", next_line)
                     if match:
                         fields["assumed_ror"] = match.group(1)
+                        logging.debug(f"ALZ assumed_ror: {match.group(1)}")
                         break
-    elif "mnl" in filename:
+    elif selected_keyword == "mnl":
         ror_match = re.search(mn_ror_pattern, text, re.IGNORECASE | re.DOTALL)
         if ror_match:
             fields["assumed_ror"] = f"{ror_match.group(1)}%"
+            logging.debug(f"MNL assumed_ror (primary): {ror_match.group(1)}%")
         else:
-            ror_match = re.search(related_ror_patterns["mn"], text, re.IGNORECASE)
+            ror_match = re.search(related_ror_patterns["mnl"], text, re.IGNORECASE)
             if ror_match:
                 fields["assumed_ror"] = ror_match.group(1).strip()
-    elif "nationwide" in filename:
+                logging.debug(f"MNL assumed_ror (fallback): {ror_match.group(1)}")
+    elif selected_keyword == "nationwide":
         ror_match = re.search(nw_ror_pattern, text, re.IGNORECASE | re.DOTALL)
         if ror_match:
             fields["assumed_ror"] = ror_match.group(1).strip()
-            logger.debug(f"Nationwide assumed_ror matched: {ror_match.group(1)}")
+            logging.debug(f"Nationwide assumed_ror (primary): {ror_match.group(1)}")
         else:
-            ror_match = re.search(r"assumed\s*[:\s]*([\d.]+%)", text, re.IGNORECASE)
+            ror_match = re.search(related_ror_patterns["nationwide"], text, re.IGNORECASE)
             if ror_match:
                 fields["assumed_ror"] = ror_match.group(1).strip()
-                logger.debug(f"Nationwide fallback assumed_ror: {ror_match.group(1)}")
-            else:
-                logger.debug("Nationwide assumed_ror not found")
+                logging.debug(f"Nationwide assumed_ror (fallback): {ror_match.group(1)}")
     else:
-        selected_ror_pattern = default_ror_pattern
-        for keyword, pattern in related_ror_patterns.items():
-            if keyword in filename:
-                selected_ror_pattern = pattern
-                break
+        # Use the selected keyword's pattern or default if none matched
+        selected_ror_pattern = related_ror_patterns.get(selected_keyword, default_ror_pattern)
         match = re.search(selected_ror_pattern, text, re.IGNORECASE)
         if match:
             fields["assumed_ror"] = match.group(1).strip()
+            logging.debug(f"Assumed_ror for {selected_keyword or 'default'}: {match.group(1)}")
 
     # Define patterns for other fields
     patterns = {
