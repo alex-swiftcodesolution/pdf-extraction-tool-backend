@@ -466,6 +466,7 @@ def extract_ledger_basic_ledger(page):
     """
     Extracts specified columns (1,2,4,5,12,13,14 -> 0-based: 0,1,3,4,11,12,13) from a table
     on a PDF page containing the keyword 'Ledger\nbasic ledger' using PyMuPDF. Fills empty cells with "222".
+    For rows with exactly 13 columns, inserts an empty column at index 2 to align with 14-column rows.
     
     Args:
         page: PyMuPDF page object to process
@@ -473,17 +474,29 @@ def extract_ledger_basic_ledger(page):
     Returns:
         List of tuples with selected columns, keyword, and page number
     """
+    import re
+    import numpy as np
+    import logging
+    logger = logging.getLogger(__name__)
+
     # Check if the keyword is present
     keyword = "Ledger\nbasic ledger"
     page_text = page.get_text().lower()
     if keyword.lower() not in page_text:
+        logger.debug(f"Keyword '{keyword}' not found on page {page.number + 1}")
         return []
 
     # Define helper function to identify numeric or currency values
     def is_numeric_or_currency(text):
-        if text in ("", None, np.nan, "222", "Yes", "1"):  # Allow "222", "Yes", and "1" as valid
+        if text in ("", None, np.nan, "222", "Yes", "1"):
             return True
         return bool(re.match(r'^-?\$?\d{1,3}(,\d{3})*(\.\d+)?$|^-?\d+(\.\d+)?$|^-?\d*\.\d+%?$', text))
+
+    # Helper function to check for English words
+    def has_english_words(text):
+        if text in ("", None, np.nan, "222", "Yes", "1"):
+            return False
+        return bool(re.search(r'\b[a-zA-Z]+\b', str(text)))
 
     # Extract text spans within y-coordinate range
     lines = []
@@ -496,6 +509,7 @@ def extract_ledger_basic_ledger(page):
                     lines.append((y, span["bbox"][0], span["text"].strip()))
 
     if not lines:
+        logger.debug(f"No text spans found within y-coordinate range on page {page.number + 1}")
         return []
 
     # Sort lines by y-coordinate (rounded to 1 decimal) then x-coordinate
@@ -504,54 +518,77 @@ def extract_ledger_basic_ledger(page):
     # Log raw spans for debugging
     logger.debug(f"Raw spans for page {page.number + 1}: {lines}")
 
-    # Group lines into rows and fill empty cells with "222"
+    # Group lines into rows
     table_data, current_row, last_y = [], [], None
-    expected_cols = 14  # Maximum expected columns based on indices [0,1,3,4,11,12,13]
     for y, x, text in lines:
-        if last_y is None or abs(y - last_y) < 10:  # Increased threshold for row grouping
-            current_row.append((x, text if text.strip() else "222"))
+        if last_y is None or abs(y - last_y) < 10:  # Threshold for row grouping
+            current_row.append((x, text if text.strip() else ""))
         else:
             current_row.sort()
             row = [t for _, t in current_row]
-            if len(row) >= 5 and sum(is_numeric_or_currency(t) for t in row) >= 5:  # Require at least 5 valid cells
-                # Fill empty cells with "222"
-                row = [cell if cell != "" else "222" for cell in row]
-                # Pad row to expected_cols with "222"
-                row = row + ["222"] * (expected_cols - len(row))
+            # Require at least 5 columns and 3 valid cells
+            if len(row) >= 5 and sum(is_numeric_or_currency(t) for t in row) >= 3:
+                # If row has exactly 13 columns, insert an empty column at index 2
+                if len(row) == 13:
+                    row = row[:2] + [""] + row[2:]
+                    logger.debug(f"Row adjusted (added empty column at index 2, now {len(row)} columns): {row}")
                 table_data.append(row)
-            current_row = [(x, text if text.strip() else "222")]
+            current_row = [(x, text if text.strip() else "")]
         last_y = y
 
     if current_row:
         current_row.sort()
         row = [t for _, t in current_row]
-        if len(row) >= 5 and sum(is_numeric_or_currency(t) for t in row) >= 5:
-            # Fill empty cells with "222"
-            row = [cell if cell != "" else "222" for cell in row]
-            # Pad row to expected_cols with "222"
-            row = row + ["222"] * (expected_cols - len(row))
+        if len(row) >= 5 and sum(is_numeric_or_currency(t) for t in row) >= 3:
+            # If row has exactly 13 columns, insert an empty column at index 2
+            if len(row) == 13:
+                row = row[:2] + [""] + row[2:]
+                logger.debug(f"Last row adjusted (added empty column at index 2, now {len(row)} columns): {row}")
             table_data.append(row)
 
     if not table_data:
+        logger.debug(f"No table data extracted for '{keyword}' on page {page.number + 1}")
         return []
 
-    # Log raw table data
-    logger.debug(f"Raw table data for {keyword}: {table_data}")
+    # Log raw table data with column counts
+    logger.debug(f"Raw table data for {keyword} (page {page.number + 1}):")
+    for i, row in enumerate(table_data):
+        logger.debug(f"Row {i+1} ({len(row)} columns): {row}")
+
+    # Pad rows to the maximum observed length to ensure consistent column access
+    max_columns = max(len(row) for row in table_data)
+    table_data = [row + [""] * (max_columns - len(row)) for row in table_data]
+
+    # Log padded table data
+    logger.debug(f"Padded table data for {keyword} (max {max_columns} columns):")
+    for i, row in enumerate(table_data):
+        logger.debug(f"Row {i+1}: {row}")
 
     # Select specified columns (1,2,4,5,12,13,14 -> 0-based indices: 0,1,3,4,11,12,13)
     selected_indices = [0, 1, 3, 4, 11, 12, 13]
+    # Ensure selected indices are within the maximum column count
+    valid_indices = [i for i in selected_indices if i < max_columns]
+    if valid_indices != selected_indices:
+        logger.warning(f"Some selected indices {selected_indices} exceed max columns {max_columns}. Using {valid_indices}")
+
     table_data = [
-        [row[i] if i < len(row) else "222" for i in selected_indices]
+        [row[i] if i < len(row) else "" for i in valid_indices]
+        for row in table_data
+    ]
+
+    # Fill empty cells with "222" after column selection
+    table_data = [
+        [cell if cell.strip() else "222" for cell in row]
         for row in table_data
     ]
 
     # Log selected columns
-    logger.debug(f"Table data after selecting columns: {table_data}")
+    logger.debug(f"Table data after selecting columns and filling empty cells: {table_data}")
 
-    # Filter rows: allow "222", "Yes", or non-English words
+    # Filter rows: allow "222", "Yes", or numeric/currency values
     table_data = [
         row for row in table_data
-        if all(cell in ("222", "Yes") or not has_english_words(str(cell)) for cell in row)
+        if all(cell in ("222", "Yes") or is_numeric_or_currency(cell) for cell in row)
     ]
 
     # Log filtered table data
